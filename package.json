@@ -1,0 +1,34 @@
+{
+  "name": "leetloop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A local-first LeetCode review companion that tracks submissions and schedules practice automatically.",
+  "scripts": {
+    "dev": "wxt",
+    "build": "wxt build",
+    "zip": "wxt zip",
+    "icons": "node scripts/generate-icons.mjs",
+    "compile": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run compile && npm run test && npm run build"
+  },
+  "dependencies": {
+    "dexie": "^4.4.4",
+    "dexie-react-hooks": "^1.1.7",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "ts-fsrs": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.1.4",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@wxt-dev/module-react": "^1.2.2",
+    "jsdom": "^28.0.0",
+    "sharp": "^0.35.3",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "wxt": "^0.21.3"
+  }
+}
