@@ -1,5 +1,7 @@
 # LeetLoop
 
+<p align="right"><a href="./README.md"><kbd>简体中文</kbd></a> <a href="./README.en.md"><kbd>English</kbd></a></p>
+
 LeetLoop 是一个本地优先的 LeetCode 复习伴侣。它在你正常做题时自动记录提交结果，并根据间隔重复安排下一次练习，目标不是统计“做过多少题”，而是持续验证“现在还会多少”。
 
 ## 第一版包含什么
