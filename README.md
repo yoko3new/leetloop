@@ -1,69 +1,71 @@
 # LeetLoop
 
-<p align="right"><a href="./README.md"><kbd>简体中文</kbd></a> <a href="./README.en.md"><kbd>English</kbd></a></p>
+## 🌐 Language / 语言
 
-LeetLoop 是一个本地优先的 LeetCode 复习伴侣。它在你正常做题时自动记录提交结果，并根据间隔重复安排下一次练习，目标不是统计“做过多少题”，而是持续验证“现在还会多少”。
+**🇺🇸 English (default)** · [**🇨🇳 简体中文 →**](./README.zh-CN.md)
 
-## 当前版本包含什么
+LeetLoop is a local-first LeetCode review companion. It records your submissions as you solve problems and schedules practice with spaced repetition. The goal is to keep checking what you can still solve, rather than simply counting problems you have completed.
 
-- 在 `leetcode.com/problems/*` 页面自动识别题目和提交结果；
-- 自动记录日期、AC/WA/TLE、耗时、提交次数、语言和检测到的页面内提示暴露；
-- 使用 FSRS 加刷题规则安排复习；
-- Chrome 侧栏提供“今日、题单、记录”三个页面；题单支持 Blind 75、NeetCode 250 和热题 100，并按主题显示完成进度；
-- 同一题的多次提交在记录页汇总为一条，可展开查看首刷、复习和提交明细；
-- 复习失败会缩短下一次复习间隔，并在记录页推荐同类题；提前复习成功会从当天重新计算当前间隔；
-- 通过扩展角标和每日通知显示到期题数；
-- 可在侧栏右上角开关每日提醒并调整提醒时间；
-- 所有数据仅保存在本机，不需要账户或服务器；
-- 不保存代码、Cookie、LeetCode Session，也不批量读取历史记录。
+## Current features
 
-## 技术结构
+- Detects problems and submission results on `leetcode.com/problems/*` pages;
+- Records the date, AC/WA/TLE result, time spent, number of submissions, language, and detected exposure to hints or solutions on the page;
+- Schedules reviews using FSRS plus problem-solving rules;
+- Provides Today, Study Plans, and History views in the Chrome side panel, with overall and topic progress for Blind 75, NeetCode 250, and Top 100 Liked;
+- Groups all submissions for a problem into one expandable history entry with first-solve and review details;
+- Uses failed reviews to bring the next review forward, suggests similar problems, and restarts the current interval after a successful early review;
+- Shows due problem counts with the extension badge and a daily notification;
+- Lets you switch between English and Simplified Chinese from the side-panel header and remembers your choice locally; you can also manage daily reminders;
+- Stores all data locally, without an account or server;
+- Does not save your code, cookies, or LeetCode session, and does not bulk-read submission history.
 
-- TypeScript：全部业务代码；
-- React：侧栏界面；
-- WXT：Manifest V3 构建、开发和打包；
-- Dexie + IndexedDB：浏览器本地数据库；
-- ts-fsrs：间隔重复调度；
-- Vitest：调度及掌握度单元测试。
+## Tech stack
 
-扩展由三类运行环境组成：
+- TypeScript: all application logic;
+- React: side panel UI;
+- WXT: Manifest V3 builds, development, and packaging;
+- Dexie + IndexedDB: local browser database;
+- ts-fsrs: spaced repetition scheduling;
+- Vitest: unit tests for scheduling and mastery.
 
-1. `leetcode.content` 内容脚本只观察用户当前打开的题目页面，把提交事件发送给扩展后台；
-2. `background` Service Worker 负责去重、存储、排期、通知和角标；
-3. `sidepanel` React 页面从本地数据库读取今日任务、题单进度和按题汇总的历史记录。
+The extension has three execution contexts:
 
-## 直接安装构建版
+1. The `leetcode.content` content script observes only the problem page you currently have open and sends submission events to the extension background process.
+2. The `background` service worker handles deduplication, storage, scheduling, notifications, and the badge.
+3. The `sidepanel` React app reads today's tasks, study plan progress, and per-problem history from the local database.
 
-下载并解压交付包后：
+## Install a prebuilt version
 
-1. 在 Chrome 打开 `chrome://extensions`；
-2. 打开右上角“开发者模式”；
-3. 点击“加载已解压的扩展程序”；
-4. 选择包内的 `leetloop/.output/chrome-mv3`；
-5. 打开一道 LeetCode 题，点击工具栏里的 LeetLoop 图标。
+After downloading and extracting a release package:
 
-这是未发布到 Chrome Web Store 的开发构建，因此第一次需要通过开发者模式加载。
+1. Open `chrome://extensions` in Chrome.
+2. Turn on **Developer mode** in the top-right corner.
+3. Click **Load unpacked**.
+4. Select `leetloop/.output/chrome-mv3` inside the extracted package.
+5. Open a LeetCode problem and click the LeetLoop icon in the toolbar.
 
-## 本地开发
+This is a development build that has not been published to the Chrome Web Store, so you need to load it through Developer mode the first time.
 
-需要 Node.js 20 或更高版本。
+## Local development
+
+Requires Node.js 20 or later.
 
 ```bash
 npm install
 npm run dev
 ```
 
-然后：
+Then:
 
-1. 在 Chrome 打开 `chrome://extensions`；
-2. 打开右上角“开发者模式”；
-3. 点击“加载已解压的扩展程序”；
-4. 选择 `.output/chrome-mv3`；
-5. 打开一道 LeetCode 题，点击工具栏里的 LeetLoop 图标即可打开侧栏。
+1. Open `chrome://extensions` in Chrome.
+2. Turn on **Developer mode** in the top-right corner.
+3. Click **Load unpacked**.
+4. Select `.output/chrome-mv3`.
+5. Open a LeetCode problem and click the LeetLoop icon in the toolbar to open the side panel.
 
-开发服务器运行时，WXT 会自动重建扩展；若 Chrome 没有自动更新，点击扩展卡片上的刷新按钮。
+WXT rebuilds the extension automatically while the development server runs. If Chrome does not update it automatically, click the refresh button on the extension card.
 
-## 检查和打包
+## Checks and packaging
 
 ```bash
 npm run compile
@@ -72,30 +74,30 @@ npm run build
 npm run zip
 ```
 
-构建后的可加载目录位于 `.output/chrome-mv3`，ZIP 位于 `.output`。
+The loadable extension is built in `.output/chrome-mv3`; the ZIP package is placed in `.output`.
 
-## 自动评分规则
+## Automatic scoring
 
-Accepted 并不直接等于掌握。LeetLoop 会结合：
+An Accepted result does not automatically mean a problem is mastered. LeetLoop considers:
 
-- 是否为第一次完成或间隔复习；
-- 当前会话提交次数；
-- 解题耗时；
-- 是否检测到打开 Hint、Editorial 或 Solutions；
-- 题目难度；
-- 距离上次完成的时间。
+- Whether this is the first completion or a spaced review;
+- The number of submissions in the current session;
+- Time spent solving the problem;
+- Whether you opened Hint, Editorial, or Solutions;
+- Problem difficulty;
+- Time since the previous completion.
 
-首次记录通过只进入“学习中”。后续复习中的失败提交会作为遗忘信号，把下次复习提前；同一次练习的连续失败只评分一次。提前成功复习时，下次日期从当天按当前间隔重算。这些评分是用于排期的保守代理信号，不是对“独立完成”或真实面试能力的证明。
+The first successful submission only moves a problem into **Learning**. A failed later review is treated as a lapse and brings the next review forward; repeated failures in one session receive one grade. A successful early review restarts the current interval from that day. These scores are conservative signals for scheduling, not proof that you solved a problem independently or can reproduce the performance in an interview.
 
-## 隐私与平台边界
+## Privacy and platform boundaries
 
-本项目不调用 LeetCode 未公开接口，不在后台轮询 LeetCode，不自动翻页或批量抓取历史提交。内容脚本只处理用户主动打开的当前题目页面，并只保存复习所需的最小元数据。
+This project does not call undocumented LeetCode APIs, poll LeetCode in the background, automatically navigate pages, or bulk-scrape past submissions. The content script processes only the problem page you actively open and stores only the metadata needed for review.
 
-当前版本从安装后开始形成可靠记录。过去已经完成的题目不会自动补齐；它们以后再次打开和提交时会自然进入复习系统。
+The current version starts building reliable records after installation. It does not automatically import problems you completed in the past; those problems enter the review system naturally when you open and submit them again.
 
-## 当前限制
+## Current limitations
 
-- LeetCode 改版可能导致提交结果选择器需要更新；代码将站点解析集中在一个内容脚本内，便于修复。
-- 系统能识别 LeetCode 页面内打开的提示或题解，无法知道用户是否在其他网站查看答案。
-- 当前版本只支持 `leetcode.com`；中国站可以通过新增独立 provider adapter 支持。
-- 数据尚未跨设备同步。升级时请覆盖原安装目录并在 Chrome 扩展页点击“刷新”；卸载扩展会删除本地记录。
+- LeetCode site changes may require updates to the submission-result selectors. Site parsing is kept in one content script to make those fixes easier.
+- The extension can detect hints or solutions opened on LeetCode pages, but it cannot know whether you viewed answers on other websites.
+- The current version supports only `leetcode.com`. The Chinese site could be supported with a separate provider adapter.
+- Data does not yet sync across devices. To upgrade, replace the files in the original installation directory and click Reload in Chrome's extensions page. Uninstalling the extension deletes its local records.

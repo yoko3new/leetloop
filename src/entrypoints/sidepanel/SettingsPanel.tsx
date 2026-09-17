@@ -1,10 +1,12 @@
 import { useEffect } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { DEFAULT_SETTINGS, db } from '../../lib/db';
+import { t, type Locale } from '../../lib/i18n';
 import type { Settings } from '../../lib/types';
 import './settings.css';
 
 interface SettingsPanelProps {
+  locale: Locale;
   onClose: () => void;
 }
 
@@ -13,7 +15,7 @@ async function updateSettings(patch: Partial<Settings>): Promise<void> {
   await db.settings.put({ ...current, ...patch, id: 'main' });
 }
 
-export function SettingsPanel({ onClose }: SettingsPanelProps) {
+export function SettingsPanel({ locale, onClose }: SettingsPanelProps) {
   const settings = useLiveQuery(
     () => db.settings.get('main'),
     [],
@@ -44,11 +46,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
       >
         <header className="settings-heading">
           <div>
-            <p>轻量设置</p>
-            <h2 id="settings-title">提醒</h2>
+            <p>{t(locale, 'settingsEyebrow')}</p>
+            <h2 id="settings-title">{t(locale, 'settingsHeading')}</h2>
           </div>
           <button
-            aria-label="关闭设置"
+            aria-label={t(locale, 'closeSettings')}
             className="settings-close"
             onClick={onClose}
             type="button"
@@ -66,8 +68,8 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
 
         <label className="settings-row settings-row--toggle">
           <span>
-            <strong>每日复习提醒</strong>
-            <small>有题到期时，每天最多通知一次</small>
+            <strong>{t(locale, 'dailyReminder')}</strong>
+            <small>{t(locale, 'dailyReminderHelp')}</small>
           </span>
           <input
             checked={currentSettings.reminderEnabled}
@@ -82,11 +84,11 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
           className={`settings-row ${currentSettings.reminderEnabled ? '' : 'is-disabled'}`}
         >
           <span>
-            <strong>提醒时间</strong>
-            <small>按当前设备的本地时间</small>
+            <strong>{t(locale, 'reminderTime')}</strong>
+            <small>{t(locale, 'reminderTimeHelp')}</small>
           </span>
           <select
-            aria-label="每日提醒时间"
+            aria-label={t(locale, 'reminderTimeAria')}
             disabled={!currentSettings.reminderEnabled}
             onChange={(event) => {
               void updateSettings({ reminderHour: Number(event.target.value) });
@@ -102,7 +104,7 @@ export function SettingsPanel({ onClose }: SettingsPanelProps) {
         </label>
 
         <p className="settings-note">
-          记录和排期都只保存在此浏览器中；关闭提醒不会停止自动记录。
+          {t(locale, 'settingsNote')}
         </p>
       </section>
     </div>

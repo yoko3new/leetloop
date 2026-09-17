@@ -51,7 +51,11 @@ export function normalizeTopic(raw: string): string {
     .replace(/^-|-$/g, '');
 }
 
-export function topicLabel(topic: string): string {
+export function topicLabel(topic: string, locale: Locale = 'zh'): string {
   const key = normalizeTopic(topic);
+  if (locale === 'en') {
+    return key.split('-').map((word) => word.charAt(0).toUpperCase() + word.slice(1)).join(' ') || topic;
+  }
   return TOPIC_LABELS[key] ?? topic;
 }
+import type { Locale } from './i18n';

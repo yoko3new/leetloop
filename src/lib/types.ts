@@ -1,4 +1,5 @@
 import type { Card } from 'ts-fsrs';
+import type { Locale } from './i18n';
 
 export type ProblemDifficulty = 'Easy' | 'Medium' | 'Hard' | 'Unknown';
 
@@ -78,6 +79,7 @@ export interface ReviewLog {
 
 export interface Settings {
   id: 'main';
+  locale?: Locale;
   reminderEnabled: boolean;
   reminderHour: number;
   desiredRetention: number;
@@ -123,8 +125,9 @@ export type ExtensionRequest =
   | { type: 'PAGE_SEEN'; problem: ProblemCapture; seenAt: string }
   | { type: 'RECORD_ATTEMPT'; capture: AttemptCapture }
   | { type: 'GET_PROBLEM_STATUS'; slug: string }
+  | { type: 'GET_LOCALE' }
   | { type: 'REFRESH_BADGE' };
 
 export type ExtensionResponse =
-  | { ok: true; data?: RecordAttemptResponse | ProblemStatus }
+  | { ok: true; data?: RecordAttemptResponse | ProblemStatus | Locale }
   | { ok: false; error: string };

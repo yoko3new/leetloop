@@ -10,6 +10,7 @@ import type {
   SubmissionVerdict,
 } from '../../lib/types';
 import { terminalBelongsToAttempt } from '../../lib/capture-state';
+import { getLocale, t, type Locale, type TextKey } from '../../lib/i18n';
 
 const PROBLEM_PATH = /^\/problems\/([^/]+)/;
 const RESULT_SELECTOR = [
@@ -46,6 +47,17 @@ const EXACT_VERDICTS: ReadonlyArray<readonly [RegExp, SubmissionVerdict]> = [
   [/^(?:Compile Error|编译出错|编译错误)$/i, 'Compile Error'],
   [/^(?:Output Limit Exceeded|超出输出限制)$/i, 'Output Limit Exceeded'],
 ];
+
+const VERDICT_KEYS: Record<SubmissionVerdict, TextKey> = {
+  Accepted: 'verdictAccepted',
+  'Wrong Answer': 'verdictWrong',
+  'Time Limit Exceeded': 'verdictTime',
+  'Runtime Error': 'verdictRuntime',
+  'Memory Limit Exceeded': 'verdictMemory',
+  'Compile Error': 'verdictCompile',
+  'Output Limit Exceeded': 'verdictOutput',
+  Unknown: 'verdictUnknown',
+};
 
 interface PendingAttempt {
   id: string;
@@ -320,6 +332,12 @@ export default defineContentScript({
     let navigationTimer: number | undefined;
     let lastSubmitClickAt = 0;
     let uiRoot: ShadowRoot | undefined;
+    let locale: Locale = 'en';
+    let currentStatus: ProblemStatus | undefined;
+
+    function dateLanguage(): string {
+      return locale === 'zh' ? 'zh-CN' : 'en-US';
+    }
 
     function mountUi(): ShadowRoot {
       if (uiRoot) return uiRoot;
@@ -397,7 +415,7 @@ export default defineContentScript({
         </style>
         <div id="due-pill" role="status" aria-live="polite">
           <span id="due-dot"></span>
-          <span>LeetLoop · 今天该复习</span>
+          <span id="due-text">${t(locale, 'pageDuePill')}</span>
         </div>
         <div id="toasts" role="status" aria-live="polite"></div>
       `;
@@ -407,16 +425,20 @@ export default defineContentScript({
     }
 
     function setDuePill(status?: ProblemStatus): void {
+      currentStatus = status;
       const pill = mountUi().getElementById('due-pill');
       if (!(pill instanceof HTMLElement)) return;
+
+      const text = mountUi().getElementById('due-text');
+      if (text) text.textContent = t(locale, 'pageDuePill');
 
       const visible = Boolean(status?.tracked && status.due);
       pill.classList.toggle('visible', visible);
       if (visible && status?.nextReviewAt) {
         const dueAt = new Date(status.nextReviewAt);
         pill.title = Number.isNaN(dueAt.getTime())
-          ? '这道题已到复习时间'
-          : `计划复习时间：${dueAt.toLocaleString('zh-CN')}`;
+          ? t(locale, 'pageDueNow')
+          : t(locale, 'pageDueAt', { date: dueAt.toLocaleString(dateLanguage()) });
       } else {
         pill.removeAttribute('title');
       }
@@ -448,7 +470,16 @@ export default defineContentScript({
       }
     }
 
+    async function refreshLocale(): Promise<void> {
+      const response = await send({ type: 'GET_LOCALE' });
+      if (response.ok && typeof response.data === 'string') {
+        locale = getLocale(response.data);
+        setDuePill(currentStatus);
+      }
+    }
+
     async function refreshProblemStatus(slug: string, generation: number): Promise<void> {
+      await refreshLocale();
       const response = await send({ type: 'GET_PROBLEM_STATUS', slug });
       if (generation !== routeGeneration || slug !== currentSlug) return;
 
@@ -672,35 +703,36 @@ export default defineContentScript({
           response = await send({ type: 'RECORD_ATTEMPT', capture });
           if (response.ok) break;
         }
+        await refreshLocale();
         if (!response.ok) {
-          showToast(`${verdict} · 记录失败`, 'error');
+          showToast(t(locale, 'captureFailed', { verdict: t(locale, VERDICT_KEYS[verdict]) }), 'error');
           return;
         }
 
         if (!isRecordAttemptResponse(response.data)) {
-          showToast(`${verdict} · 已记录`, verdict === 'Accepted' ? 'success' : 'neutral');
+          showToast(t(locale, 'captureSaved', { verdict: t(locale, VERDICT_KEYS[verdict]) }), verdict === 'Accepted' ? 'success' : 'neutral');
           return;
         }
 
         if (response.data.duplicate) {
-          showToast('这次提交已经记录过了');
+          showToast(t(locale, 'captureDuplicate'));
         } else if (response.data.accepted && response.data.nextReviewAt) {
           const nextReview = new Date(response.data.nextReviewAt);
           const suffix = Number.isNaN(nextReview.getTime())
-            ? '已安排复习'
-            : `下次复习 ${nextReview.toLocaleDateString('zh-CN', {
+            ? t(locale, 'reviewScheduled')
+            : t(locale, 'nextReviewShort', { date: nextReview.toLocaleDateString(dateLanguage(), {
                 month: 'numeric',
                 day: 'numeric',
-              })}`;
-          showToast(`Accepted · ${suffix}`, 'success');
+              }) });
+          showToast(`${t(locale, 'verdictAccepted')} · ${suffix}`, 'success');
         } else if (!response.data.accepted && response.data.isReview && response.data.nextReviewAt) {
           const nextReview = new Date(response.data.nextReviewAt);
           const suffix = Number.isNaN(nextReview.getTime())
-            ? '已提前安排复习'
-            : `已加强复习 · ${nextReview.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} 再练`;
-          showToast(`${verdict} · ${suffix}`, 'neutral');
+            ? t(locale, 'failureRescheduled')
+            : t(locale, 'practiceAgain', { date: nextReview.toLocaleDateString(dateLanguage(), { month: 'numeric', day: 'numeric' }) });
+          showToast(`${t(locale, VERDICT_KEYS[verdict])} · ${suffix}`, 'neutral');
         } else {
-          showToast(`${verdict} · 已记录`, response.data.accepted ? 'success' : 'neutral');
+          showToast(t(locale, 'captureSaved', { verdict: t(locale, VERDICT_KEYS[verdict]) }), response.data.accepted ? 'success' : 'neutral');
         }
 
         if (currentSlug === pending.problem.slug) {
@@ -764,8 +796,10 @@ export default defineContentScript({
     document.addEventListener('keydown', handleKeydown, true);
     window.addEventListener('popstate', handleRouteChange);
     window.addEventListener('hashchange', handleRouteChange);
+    window.addEventListener('focus', () => void refreshLocale());
     navigationTimer = window.setInterval(handleRouteChange, 750);
     handleRouteChange();
+    void refreshLocale();
 
     // Retain the timer reference to make the content script lifecycle explicit.
     void navigationTimer;

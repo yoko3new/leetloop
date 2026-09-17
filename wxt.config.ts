@@ -5,12 +5,12 @@ export default defineConfig({
   modules: ['@wxt-dev/module-react'],
   manifest: {
     name: 'LeetLoop',
-    description: '自动记录 LeetCode 提交，并在遗忘前安排复习。',
-    version: '0.2.0',
+    description: 'Track LeetCode submissions and schedule spaced reviews before you forget.',
+    version: '0.3.0',
     minimum_chrome_version: '116',
     permissions: ['alarms', 'notifications', 'sidePanel'],
     action: {
-      default_title: '打开 LeetLoop',
+      default_title: 'Open LeetLoop',
     },
     icons: {
       16: '/icons/icon-16.png',

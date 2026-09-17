@@ -1,6 +1,7 @@
 import { browser } from 'wxt/browser';
 import { db, DEFAULT_SETTINGS, getSettings } from '@/lib/db';
 import { isDue, localDateKey } from '@/lib/dates';
+import { getLocale, t } from '@/lib/i18n';
 import { normalizeTopic } from '@/lib/topic-labels';
 import {
   updateUserProblemForAttempt,
@@ -135,6 +136,10 @@ async function handleRequest(
     case 'GET_PROBLEM_STATUS': {
       const data = await getProblemStatus(request.slug);
       return { ok: true, data };
+    }
+    case 'GET_LOCALE': {
+      const settings = await getSettings();
+      return { ok: true, data: getLocale(settings.locale) };
     }
     case 'REFRESH_BADGE':
       await refreshBadge();
@@ -361,11 +366,12 @@ async function dueCount(now = new Date()): Promise<number> {
 }
 
 async function refreshBadge(): Promise<void> {
-  const count = await dueCount();
+  const [count, settings] = await Promise.all([dueCount(), getSettings()]);
+  const locale = getLocale(settings.locale);
   await browser.action.setBadgeBackgroundColor({ color: '#5B5BD6' });
   await browser.action.setBadgeText({ text: count ? String(count) : '' });
   await browser.action.setTitle({
-    title: count ? `LeetLoop：今天有 ${count} 道待复习` : 'LeetLoop：今日已完成',
+    title: count ? t(locale, count === 1 ? 'badgeDueOne' : 'badgeDue', { count }) : t(locale, 'badgeDone'),
   });
 }
 
@@ -379,6 +385,7 @@ async function refreshBadgeSafely(context: string): Promise<void> {
 
 async function maybeNotify(now = new Date()): Promise<void> {
   const settings = await getSettings();
+  const locale = getLocale(settings.locale);
   if (!settings.reminderEnabled || now.getHours() < settings.reminderHour) {
     return;
   }
@@ -392,8 +399,8 @@ async function maybeNotify(now = new Date()): Promise<void> {
   await browser.notifications.create(`leetloop-${today}`, {
     type: 'basic',
     iconUrl: browser.runtime.getURL('/icons/icon-128.png'),
-    title: '今天该复习了',
-    message: `有 ${count} 道题正在接近遗忘点。`,
+    title: t(locale, 'notificationTitle'),
+    message: t(locale, count === 1 ? 'notificationMessageOne' : 'notificationMessage', { count }),
   });
   await db.settings.update('main', { lastNotificationDate: today });
 }

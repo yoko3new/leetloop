@@ -1,3 +1,5 @@
+import type { Locale } from './i18n';
+
 export type StudyPlanId = 'blind75' | 'neetcode250' | 'hot100';
 
 export interface StudyPlanGroup {
@@ -108,6 +110,43 @@ export const STUDY_PLANS: StudyPlan[] = [
 
 export function getStudyPlan(id: StudyPlanId): StudyPlan {
   return STUDY_PLANS.find((plan) => plan.id === id) ?? STUDY_PLANS[0]!;
+}
+
+const ENGLISH_GROUP_NAMES: Record<string, string> = {
+  '数组与哈希': 'Arrays & Hashing',
+  '双指针': 'Two Pointers',
+  '滑动窗口': 'Sliding Window',
+  '栈': 'Stack',
+  '二分查找': 'Binary Search',
+  '链表': 'Linked List',
+  '二叉树': 'Binary Tree',
+  '堆': 'Heap',
+  '回溯': 'Backtracking',
+  '字典树': 'Tries',
+  '图论': 'Graphs',
+  '高级图论': 'Advanced Graphs',
+  '一维动态规划': '1-D Dynamic Programming',
+  '二维动态规划': '2-D Dynamic Programming',
+  '贪心': 'Greedy',
+  '区间': 'Intervals',
+  '数学与几何': 'Math & Geometry',
+  '位运算': 'Bit Manipulation',
+  '哈希': 'Hashing',
+  '子串': 'Substrings',
+  '普通数组': 'Arrays',
+  '矩阵': 'Matrix',
+  '贪心算法': 'Greedy',
+  '动态规划': 'Dynamic Programming',
+  '多维动态规划': 'Multidimensional DP',
+  '技巧': 'Techniques',
+};
+
+export function studyPlanName(plan: StudyPlan, locale: Locale): string {
+  return locale === 'en' && plan.id === 'hot100' ? 'LeetCode Top 100' : plan.name;
+}
+
+export function studyPlanGroupName(name: string, locale: Locale): string {
+  return locale === 'en' ? ENGLISH_GROUP_NAMES[name] ?? name : name;
 }
 
 export function titleFromSlug(slug: string): string {

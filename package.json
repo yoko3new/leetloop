@@ -1,6 +1,6 @@
 {
   "name": "leetloop",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "A local-first LeetCode review companion that tracks submissions and schedules practice automatically.",

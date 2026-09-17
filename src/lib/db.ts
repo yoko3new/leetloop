@@ -33,6 +33,7 @@ export const db = new LeetLoopDatabase();
 
 export const DEFAULT_SETTINGS: Settings = {
   id: 'main',
+  locale: 'en',
   reminderEnabled: true,
   reminderHour: 9,
   desiredRetention: 0.9,

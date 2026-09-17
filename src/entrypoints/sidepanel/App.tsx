@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { dayDifference, localDateKey } from '../../lib/dates';
-import { db, DEFAULT_SETTINGS } from '../../lib/db';
+import { db, DEFAULT_SETTINGS, getSettings } from '../../lib/db';
+import { getLocale, t, type Locale, type TextKey } from '../../lib/i18n';
 import { calculatePlanProgress } from '../../lib/progress';
-import { getStudyPlan, STUDY_PLANS, titleFromSlug, type StudyPlanId } from '../../lib/study-plans';
+import { getStudyPlan, STUDY_PLANS, studyPlanGroupName, studyPlanName, titleFromSlug, type StudyPlanId } from '../../lib/study-plans';
 import { topicLabel } from '../../lib/topic-labels';
 import type {
   Problem,
@@ -39,28 +40,28 @@ interface DueItem {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-const difficultyLabels: Record<ProblemDifficulty, string> = {
-  Easy: '简单',
-  Medium: '中等',
-  Hard: '困难',
-  Unknown: '未知',
+const difficultyLabelKeys: Record<ProblemDifficulty, TextKey> = {
+  Easy: 'difficultyEasy',
+  Medium: 'difficultyMedium',
+  Hard: 'difficultyHard',
+  Unknown: 'difficultyUnknown',
 };
 
-const verdictLabels: Record<SubmissionVerdict, string> = {
-  Accepted: '通过',
-  'Wrong Answer': '答案错误',
-  'Time Limit Exceeded': '超出时间限制',
-  'Runtime Error': '运行错误',
-  'Memory Limit Exceeded': '超出内存限制',
-  'Compile Error': '编译错误',
-  'Output Limit Exceeded': '输出超限',
-  Unknown: '未通过',
+const verdictLabelKeys: Record<SubmissionVerdict, TextKey> = {
+  Accepted: 'verdictAccepted',
+  'Wrong Answer': 'verdictWrong',
+  'Time Limit Exceeded': 'verdictTime',
+  'Runtime Error': 'verdictRuntime',
+  'Memory Limit Exceeded': 'verdictMemory',
+  'Compile Error': 'verdictCompile',
+  'Output Limit Exceeded': 'verdictOutput',
+  Unknown: 'verdictUnknown',
 };
 
-const tabItems: Array<{ id: TabId; label: string; icon: IconName }> = [
-  { id: 'today', label: '今日', icon: 'today' },
-  { id: 'topics', label: '题单', icon: 'topics' },
-  { id: 'history', label: '记录', icon: 'history' },
+const tabItems: Array<{ id: TabId; labelKey: TextKey; icon: IconName }> = [
+  { id: 'today', labelKey: 'tabToday', icon: 'today' },
+  { id: 'topics', labelKey: 'tabPlans', icon: 'topics' },
+  { id: 'history', labelKey: 'tabHistory', icon: 'history' },
 ];
 
 type IconName =
@@ -136,49 +137,50 @@ function endOfDay(value: Date): Date {
   return result;
 }
 
-function formatPageDate(value: Date): string {
-  const date = new Intl.DateTimeFormat('zh-CN', {
+function formatPageDate(value: Date, locale: Locale): string {
+  const language = locale === 'zh' ? 'zh-CN' : 'en-US';
+  const date = new Intl.DateTimeFormat(language, {
     month: 'long',
     day: 'numeric',
   }).format(value);
-  const weekday = new Intl.DateTimeFormat('zh-CN', {
+  const weekday = new Intl.DateTimeFormat(language, {
     weekday: 'long',
   }).format(value);
   return `${date} · ${weekday}`;
 }
 
-function formatClock(value: Date): string {
-  return new Intl.DateTimeFormat('zh-CN', {
+function formatClock(value: Date, locale: Locale): string {
+  return new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', {
     hour: '2-digit',
     minute: '2-digit',
     hour12: false,
   }).format(value);
 }
 
-function formatDate(value: Date | undefined): string {
+function formatDate(value: Date | undefined, locale: Locale): string {
   return value
-    ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric' }).format(value)
+    ? new Intl.DateTimeFormat(locale === 'zh' ? 'zh-CN' : 'en-US', { year: 'numeric', month: 'numeric', day: 'numeric' }).format(value)
     : '—';
 }
 
-function formatDuration(milliseconds: number): string {
-  if (milliseconds <= 0) return '用时未记录';
+function formatDuration(milliseconds: number, locale: Locale): string {
+  if (milliseconds <= 0) return t(locale, 'noTime');
   const minutes = Math.round(milliseconds / 60_000);
-  if (minutes < 1) return `${Math.max(1, Math.round(milliseconds / 1000))} 秒`;
-  return `${minutes} 分钟`;
+  if (minutes < 1) return t(locale, 'seconds', { count: Math.max(1, Math.round(milliseconds / 1000)) });
+  return t(locale, 'minutes', { count: minutes });
 }
 
-function formatDueState(dueAt: Date, now: Date): string {
+function formatDueState(dueAt: Date, now: Date, locale: Locale): string {
   const daysLate = dayDifference(now, dueAt);
-  if (daysLate > 0) return `逾期 ${daysLate} 天`;
-  return '今天到期';
+  if (daysLate > 0) return t(locale, daysLate === 1 ? 'overdueOne' : 'overdueDays', { count: daysLate });
+  return t(locale, 'dueToday');
 }
 
-function formatNextDue(dueAt: Date, now: Date): string {
+function formatNextDue(dueAt: Date, now: Date, locale: Locale): string {
   const days = dayDifference(dueAt, now);
-  if (days <= 0) return `今天 ${formatClock(dueAt)}`;
-  if (days === 1) return '明天';
-  return `${days} 天后`;
+  if (days <= 0) return t(locale, 'nextToday', { time: formatClock(dueAt, locale) });
+  if (days === 1) return t(locale, 'tomorrow');
+  return t(locale, 'inDays', { count: days });
 }
 
 function estimateReviewMinutes(
@@ -221,19 +223,19 @@ function openLeetCodeSlug(slug: string): void {
   }
 }
 
-function historyMeta(submission: Submission): string {
+function historyMeta(submission: Submission, locale: Locale): string {
   const parts: string[] = [];
 
   if (submission.verdict === 'Accepted') {
-    if (submission.hintExposure === 'none') parts.push('未检测到提示');
-    if (submission.hintExposure === 'hint') parts.push('看过提示');
-    if (submission.hintExposure === 'solution') parts.push('看过题解');
+    if (submission.hintExposure === 'none') parts.push(t(locale, 'noHint'));
+    if (submission.hintExposure === 'hint') parts.push(t(locale, 'sawHint'));
+    if (submission.hintExposure === 'solution') parts.push(t(locale, 'sawSolution'));
   } else {
-    parts.push(verdictLabels[submission.verdict]);
+    parts.push(t(locale, verdictLabelKeys[submission.verdict]));
   }
 
   if (submission.language) parts.push(submission.language);
-  parts.push(formatDuration(submission.elapsedMs));
+  parts.push(formatDuration(submission.elapsedMs, locale));
   return parts.join(' · ');
 }
 
@@ -313,22 +315,24 @@ function EmptyState({
   );
 }
 
-function LoadingState() {
+function LoadingState({ locale }: { locale: Locale }) {
   return (
-    <div aria-label="正在读取学习记录" className="loading-state" role="status">
+    <div aria-label={t(locale, 'loadingRecords')} className="loading-state" role="status">
       <span className="skeleton skeleton--heading" />
       <span className="skeleton skeleton--summary" />
       <span className="skeleton skeleton--row" />
       <span className="skeleton skeleton--row" />
-      <span className="sr-only">正在读取学习记录</span>
+      <span className="sr-only">{t(locale, 'loadingRecords')}</span>
     </div>
   );
 }
 
 function DataErrorState({
+  locale,
   message,
   onRetry,
 }: {
+  locale: Locale;
   message: string;
   onRetry: () => void;
 }) {
@@ -337,22 +341,24 @@ function DataErrorState({
       <EmptyState
         action={
           <button className="primary-button" onClick={onRetry} type="button">
-            重新读取
+            {t(locale, 'retry')}
           </button>
         }
-        description={`本地学习记录暂时无法读取。${message ? ` ${message}` : ''}`}
+        description={t(locale, 'readFailedDescription', { message: message ? ` ${message}` : '' })}
         icon="history"
-        title="读取记录失败"
+        title={t(locale, 'readFailed')}
       />
     </div>
   );
 }
 
 function TodayPage({
+  locale,
   now,
   snapshot,
   onShowTopics,
 }: {
+  locale: Locale;
   now: Date;
   snapshot: Snapshot;
   onShowTopics: () => void;
@@ -426,11 +432,11 @@ function TodayPage({
     <div className="page page--today">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">{formatPageDate(now)}</p>
-          <h1>今日复习</h1>
+          <p className="eyebrow">{formatPageDate(now, locale)}</p>
+          <h1>{t(locale, 'todayHeading')}</h1>
         </div>
         {dueItems.length > 0 && (
-          <span className="count-badge" aria-label={`${dueItems.length} 道待复习`}>
+          <span className="count-badge" aria-label={t(locale, dueItems.length === 1 ? 'dueCountOne' : 'dueCount', { count: dueItems.length })}>
             {dueItems.length}
           </span>
         )}
@@ -440,22 +446,22 @@ function TodayPage({
         <>
           <section className="today-summary">
             <div className="today-summary__copy">
-              <p>今天还有</p>
-              <strong>{dueItems.length} 道题</strong>
-              <span>预计 {estimatedMinutes} 分钟</span>
+              <p>{t(locale, 'stillToReview')}</p>
+              <strong>{t(locale, dueItems.length === 1 ? 'problemCountOne' : 'problemCount', { count: dueItems.length })}</strong>
+              <span>{t(locale, 'estimatedMinutes', { count: estimatedMinutes })}</span>
             </div>
             <button
               className="primary-button primary-button--compact"
               onClick={() => openLeetCode(dueItems[0]?.problem)}
               type="button"
             >
-              {completedToday > 0 ? '继续复习' : '开始复习'}
+              {t(locale, completedToday > 0 ? 'continueReview' : 'startReview')}
               <Icon name="arrow" size={17} />
             </button>
             {completedToday > 0 && (
               <div className="today-summary__progress">
                 <div className="progress-copy">
-                  <span>已完成 {completedToday} 道 / 共 {progressTotal} 道</span>
+                  <span>{t(locale, 'completedProgress', { done: completedToday, total: progressTotal })}</span>
                   <span>{progressPercent}%</span>
                 </div>
                 <div className="progress-track">
@@ -467,15 +473,15 @@ function TodayPage({
 
           <section aria-labelledby="due-heading" className="section-block">
             <div className="section-heading">
-              <h2 id="due-heading">待复习</h2>
-              <span>逾期优先</span>
+              <h2 id="due-heading">{t(locale, 'toReview')}</h2>
+              <span>{t(locale, 'overdueFirst')}</span>
             </div>
             <div className="problem-list">
               {dueItems.map(({ problem, userProblem, estimateMinutes }) => (
                 <article className="problem-card" key={problem.id}>
                   <div className="problem-card__topline">
                     <span className={`difficulty difficulty--${problem.difficulty.toLowerCase()}`}>
-                      {difficultyLabels[problem.difficulty]}
+                      {t(locale, difficultyLabelKeys[problem.difficulty])}
                     </span>
                     <span
                       className={`due-label ${
@@ -484,24 +490,24 @@ function TodayPage({
                           : ''
                       }`}
                     >
-                      {formatDueState(userProblem.nextReviewAt ?? now, now)}
+                      {formatDueState(userProblem.nextReviewAt ?? now, now, locale)}
                     </span>
                   </div>
                   <h3>{problem.title}</h3>
                   <div className="problem-card__meta">
                     <span>
-                      {problem.topics.slice(0, 2).map(topicLabel).join(' · ') ||
-                        '暂未分类'}
+                      {problem.topics.slice(0, 2).map((topic) => topicLabel(topic, locale)).join(' · ') ||
+                        t(locale, 'uncategorized')}
                     </span>
-                    <span>约 {estimateMinutes} 分钟</span>
+                    <span>{t(locale, 'estimatedMinutes', { count: estimateMinutes })}</span>
                   </div>
                   <button
-                    aria-label={`在 LeetCode 打开${problem.title}`}
+                    aria-label={t(locale, 'openForReview', { title: problem.title })}
                     className="open-button"
                     onClick={() => openLeetCode(problem)}
                     type="button"
                   >
-                    去复习
+                    {t(locale, 'reviewAction')}
                     <Icon name="arrow" size={16} />
                   </button>
                 </article>
@@ -517,35 +523,35 @@ function TodayPage({
               onClick={() => openLeetCode()}
               type="button"
             >
-              打开 LeetCode
+              {t(locale, 'openLeetCode')}
               <Icon name="arrow" size={17} />
             </button>
           }
-          description="在 LeetCode 题目页开始做题，通过后会自动进入复习计划。"
+          description={t(locale, 'noPlanDescription')}
           icon="today"
-          title="还没有复习计划"
+          title={t(locale, 'noPlanTitle')}
         />
       ) : (
         <EmptyState
           action={
             <button className="secondary-button" onClick={onShowTopics} type="button">
-              从题单选一题
+              {t(locale, 'chooseFromPlan')}
             </button>
           }
           description={
             nextFutureReview
-              ? `下一道题将在${formatNextDue(nextFutureReview, now)}到期。`
-              : '目前没有已安排的复习，完成新题后会自动加入。'
+              ? t(locale, 'nextProblemDue', { when: formatNextDue(nextFutureReview, now, locale) })
+              : t(locale, 'noScheduled')
           }
           icon="check"
-          title={completedToday > 0 ? '今天的复习完成了' : '今天没有到期题目'}
+          title={t(locale, completedToday > 0 ? 'doneToday' : 'noDueToday')}
         />
       )}
     </div>
   );
 }
 
-function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
+function TopicsPage({ locale, now, snapshot }: { locale: Locale; now: Date; snapshot: Snapshot }) {
   const [expanded, setExpanded] = useState('');
   const selectedPlanId = snapshot.settings.selectedStudyPlan ?? 'blind75';
   const plan = getStudyPlan(selectedPlanId);
@@ -566,12 +572,12 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
     <div className="page page--plans">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">按常见题单查看真实进度</p>
-          <h1>题单进度</h1>
+          <p className="eyebrow">{t(locale, 'planEyebrow')}</p>
+          <h1>{t(locale, 'planHeading')}</h1>
         </div>
       </header>
 
-      <div aria-label="选择题单" className="plan-picker" role="group">
+      <div aria-label={t(locale, 'choosePlan')} className="plan-picker" role="group">
         {STUDY_PLANS.map((option) => (
           <button
             aria-pressed={option.id === plan.id}
@@ -585,16 +591,16 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
             }}
             type="button"
           >
-            {option.name}
+            {studyPlanName(option, locale)}
           </button>
         ))}
       </div>
 
-      <section aria-label={`${plan.name}总体进度`} className="plan-summary">
-        <span>已完成</span>
-        <strong>{progress.solved}<small> / {progress.total} 题</small></strong>
+      <section aria-label={t(locale, 'overallProgress', { plan: studyPlanName(plan, locale) })} className="plan-summary">
+        <span>{t(locale, 'completed')}</span>
+        <strong>{progress.solved}<small> {t(locale, 'totalProblems', { count: progress.total })}</small></strong>
         <div
-          aria-label={`已完成 ${progress.solved} / ${progress.total} 题`}
+          aria-label={t(locale, 'progressAria', { done: progress.solved, total: progress.total })}
           aria-valuemax={progress.total}
           aria-valuemin={0}
           aria-valuenow={progress.solved}
@@ -603,12 +609,12 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
         >
           <span style={{ width: `${Math.round(progress.solved / progress.total * 100)}%` }} />
         </div>
-        <p>只有记录过通过的题目计入完成；重复提交不会重复计数。</p>
+        <p>{t(locale, 'progressNote')}</p>
       </section>
 
       <div className="section-heading plan-section-heading">
-        <h2>分主题进度</h2>
-        <a href={plan.sourceUrl} rel="noreferrer" target="_blank">查看原题单 ↗</a>
+        <h2>{t(locale, 'topicProgress')}</h2>
+        <a href={plan.sourceUrl} rel="noreferrer" target="_blank">{t(locale, 'viewOriginalPlan')}</a>
       </div>
       <div className="plan-groups">
         {progress.groups.map(({ group, solved, total }) => {
@@ -623,8 +629,8 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
                 type="button"
               >
                 <span className="plan-group__heading">
-                  <strong>{group.name}</strong>
-                  <span>{solved} / {total} 题</span>
+                  <strong>{studyPlanGroupName(group.name, locale)}</strong>
+                  <span>{t(locale, total === 1 ? 'groupProblemCountOne' : 'groupProblemCount', { done: solved, total })}</span>
                 </span>
                 <span className="plan-group__progress">
                   <span style={{ width: `${Math.round(solved / total * 100)}%` }} />
@@ -646,7 +652,7 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
                           </span>
                           <strong>{problem?.title ?? titleFromSlug(slug)}</strong>
                           <button
-                            aria-label={`打开${problem?.title ?? titleFromSlug(slug)}`}
+                            aria-label={t(locale, 'openProblemNamed', { title: problem?.title ?? titleFromSlug(slug) })}
                             onClick={() => openLeetCodeSlug(slug)}
                             type="button"
                           >
@@ -654,12 +660,12 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
                           </button>
                         </div>
                         <div className="plan-problem__details">
-                          <span>首刷 {formatDate(user?.firstSolvedAt)}</span>
-                          <span>复习 {reviewCount} 次</span>
-                          <span>最近复习 {formatDate(recentReview)}</span>
+                          <span>{t(locale, 'firstSolved')} {formatDate(user?.firstSolvedAt, locale)}</span>
+                          <span>{t(locale, 'reviewCount')} {t(locale, 'reviewTimes', { count: reviewCount })}</span>
+                          <span>{t(locale, 'lastReview')} {formatDate(recentReview, locale)}</span>
                         </div>
                         {user?.nextReviewAt && (
-                          <p className="plan-problem__next">下次复习：{formatDate(user.nextReviewAt)}{user.nextReviewAt <= now ? ' · 已到期' : ''}</p>
+                          <p className="plan-problem__next">{t(locale, 'nextReviewDate', { date: formatDate(user.nextReviewAt, locale) })}{user.nextReviewAt <= now ? ` · ${t(locale, 'alreadyDue')}` : ''}</p>
                         )}
                       </article>
                     );
@@ -674,7 +680,7 @@ function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
   );
 }
 
-function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
+function HistoryPage({ locale, now, snapshot }: { locale: Locale; now: Date; snapshot: Snapshot }) {
   const [filter, setFilter] = useState<HistoryFilter>('all');
   const [expandedProblemId, setExpandedProblemId] = useState<string | null>(null);
   const problemById = useMemo(
@@ -719,25 +725,27 @@ function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
     <div className="page page--history">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">同一道题只显示一条记录</p>
-          <h1>学习记录</h1>
+          <p className="eyebrow">{t(locale, 'historyEyebrow')}</p>
+          <h1>{t(locale, 'historyHeading')}</h1>
         </div>
       </header>
 
       <section className="week-summary">
-        <span>近 7 天</span>
-        <p>练习 <strong>{practicedThisWeek}</strong> 道题 · 复习 <strong>{reviewCountThisWeek}</strong> 次</p>
+        <span>{t(locale, 'lastSevenDays')}</span>
+        <p>{locale === 'en'
+          ? `Practiced ${practicedThisWeek} ${practicedThisWeek === 1 ? 'problem' : 'problems'} · ${reviewCountThisWeek} ${reviewCountThisWeek === 1 ? 'review' : 'reviews'}`
+          : t(locale, 'practicedSummary', { problems: practicedThisWeek, reviews: reviewCountThisWeek })}</p>
       </section>
 
-      <div aria-label="记录筛选" className="filter-chips" role="group">
+      <div aria-label={t(locale, 'historyFilters')} className="filter-chips" role="group">
         {(
           [
-            ['all', '全部'],
-            ['solved', '已完成'],
-            ['failed', '有失败'],
-            ['review', '已复习'],
+            ['all', 'filterAll'],
+            ['solved', 'filterSolved'],
+            ['failed', 'filterFailed'],
+            ['review', 'filterReviewed'],
           ] as const
-        ).map(([value, label]) => (
+        ).map(([value, labelKey]) => (
           <button
             aria-pressed={filter === value}
             className={filter === value ? 'is-active' : ''}
@@ -745,15 +753,15 @@ function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
             onClick={() => setFilter(value)}
             type="button"
           >
-            {label}
+            {t(locale, labelKey)}
           </button>
         ))}
       </div>
 
       {entries.length === 0 ? (
-        <EmptyState description="在 LeetCode 提交后，这里会按题目汇总记录。" icon="history" title="还没有学习记录" />
+        <EmptyState description={t(locale, 'emptyHistoryDescription')} icon="history" title={t(locale, 'emptyHistory')} />
       ) : filteredEntries.length === 0 ? (
-        <EmptyState description="尝试切换上方的筛选条件。" icon="history" title="没有符合条件的记录" />
+        <EmptyState description={t(locale, 'noFilterResultsDescription')} icon="history" title={t(locale, 'noFilterResults')} />
       ) : (
         <div className="history-problems">
           {filteredEntries.map((entry) => {
@@ -783,35 +791,35 @@ function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
                   <span className={needsPractice || !user?.firstSolvedAt ? 'timeline-dot timeline-dot--failed' : 'timeline-dot timeline-dot--accepted'} />
                   <span className="history-problem__main">
                     <strong>{title}</strong>
-                    <span>{entry.attempts.length} 次提交 · 最近 {formatDate(latest.submittedAt)}</span>
+                    <span>{t(locale, entry.attempts.length === 1 ? 'attemptSummaryOne' : 'attemptSummary', { count: entry.attempts.length, date: formatDate(latest.submittedAt, locale) })}</span>
                   </span>
                   <span className={needsPractice
                     ? 'status-chip status-chip--warning'
                     : user?.firstSolvedAt
                       ? 'status-chip status-chip--success'
                       : 'status-chip status-chip--danger'}>
-                    {needsPractice ? '待巩固' : user?.firstSolvedAt ? '已完成' : '未通过'}
+                    {t(locale, needsPractice ? 'needsPractice' : user?.firstSolvedAt ? 'solved' : 'notAccepted')}
                   </span>
                   <span aria-hidden="true" className="history-problem__chevron">{isOpen ? '⌃' : '⌄'}</span>
                 </button>
                 {isOpen && (
                   <div className="history-problem__body">
                     <div className="history-problem__stats">
-                      <span>首刷 <strong>{formatDate(user?.firstSolvedAt)}</strong></span>
-                      <span>复习 <strong>{reviewCount} 次</strong></span>
-                      <span>最近复习 <strong>{formatDate(latestReview)}</strong></span>
+                      <span>{t(locale, 'firstSolved')} <strong>{formatDate(user?.firstSolvedAt, locale)}</strong></span>
+                      <span>{t(locale, 'reviewCount')} <strong>{t(locale, 'reviewTimes', { count: reviewCount })}</strong></span>
+                      <span>{t(locale, 'lastReview')} <strong>{formatDate(latestReview, locale)}</strong></span>
                     </div>
                     {user?.nextReviewAt && (
-                      <p className="history-problem__due">下次复习：{formatDate(user.nextReviewAt)}</p>
+                      <p className="history-problem__due">{t(locale, 'nextReviewDate', { date: formatDate(user.nextReviewAt, locale) })}</p>
                     )}
                     <div className="history-problem__actions">
                       <button className="secondary-button" onClick={() => openLeetCodeSlug(slug)} type="button">
-                        打开题目 <Icon name="arrow" size={15} />
+                        {t(locale, 'openProblem')} <Icon name="arrow" size={15} />
                       </button>
                     </div>
                     {related.length > 0 && (
                       <section className="similar-problems">
-                        <strong>类似题练习</strong>
+                        <strong>{t(locale, 'similarProblems')}</strong>
                         {related.map((candidate) => (
                           <button key={candidate} onClick={() => openLeetCodeSlug(candidate)} type="button">
                             {problemById.get(`leetcode:${candidate}`)?.title ?? titleFromSlug(candidate)}
@@ -821,16 +829,16 @@ function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
                       </section>
                     )}
                     <div className="history-problem__attempts">
-                      <strong>提交明细</strong>
+                      <strong>{t(locale, 'submissionDetails')}</strong>
                       {entry.attempts.map((attempt) => (
                         <div className="history-attempt" key={attempt.id}>
                           <time dateTime={attempt.submittedAt.toISOString()}>
-                            {formatDate(attempt.submittedAt)} {formatClock(attempt.submittedAt)}
+                            {formatDate(attempt.submittedAt, locale)} {formatClock(attempt.submittedAt, locale)}
                           </time>
                           <span className={attempt.verdict === 'Accepted' ? 'history-attempt__result is-accepted' : 'history-attempt__result is-failed'}>
-                            {verdictLabels[attempt.verdict]}{attempt.isReview ? ' · 复习' : ''}
+                            {t(locale, verdictLabelKeys[attempt.verdict])}{attempt.isReview ? t(locale, 'reviewSuffix') : ''}
                           </span>
-                          <small>{historyMeta(attempt)}</small>
+                          <small>{historyMeta(attempt, locale)}</small>
                         </div>
                       ))}
                     </div>
@@ -843,6 +851,16 @@ function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
       )}
     </div>
   );
+}
+
+async function saveLocale(locale: Locale): Promise<void> {
+  await getSettings();
+  await db.settings.update('main', { locale });
+  try {
+    await chrome.runtime.sendMessage({ type: 'REFRESH_BADGE' });
+  } catch {
+    // The side panel can also be previewed outside the extension.
+  }
 }
 
 export default function App() {
@@ -866,15 +884,20 @@ export default function App() {
     } catch (error) {
       return {
         status: 'error',
-        message: error instanceof Error ? error.message : '未知错误',
+        message: error instanceof Error ? error.message : t('en', 'unknownError'),
       };
     }
   }, [queryRevision]);
+  const locale = getLocale(queryState?.status === 'ready' ? queryState.snapshot.settings.locale : undefined);
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(new Date()), 60_000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    document.documentElement.lang = locale === 'zh' ? 'zh-CN' : 'en';
+  }, [locale]);
 
   return (
     <div className="app-shell">
@@ -883,12 +906,16 @@ export default function App() {
           <Icon name="loop" size={20} />
         </span>
         <span className="brand-name">LeetLoop</span>
-        <span className="local-badge">仅存本地</span>
+        <span className="local-badge">{t(locale, 'localOnly')}</span>
+        <div aria-label={t(locale, 'language')} className="language-switch" role="group">
+          <button aria-pressed={locale === 'en'} className={locale === 'en' ? 'is-active' : ''} onClick={() => void saveLocale('en')} type="button">EN</button>
+          <button aria-pressed={locale === 'zh'} className={locale === 'zh' ? 'is-active' : ''} onClick={() => void saveLocale('zh')} type="button">中文</button>
+        </div>
         <button
-          aria-label="打开提醒设置"
+          aria-label={t(locale, 'openSettings')}
           className="settings-trigger"
           onClick={() => setSettingsOpen(true)}
-          title="提醒设置"
+          title={t(locale, 'openSettings')}
           type="button"
         >
           <svg aria-hidden="true" fill="none" height="17" viewBox="0 0 24 24" width="17">
@@ -910,26 +937,28 @@ export default function App() {
 
       <main className="app-content">
         {!queryState ? (
-          <LoadingState />
+          <LoadingState locale={locale} />
         ) : queryState.status === 'error' ? (
           <DataErrorState
+            locale={locale}
             message={queryState.message}
             onRetry={() => setQueryRevision((revision) => revision + 1)}
           />
         ) : activeTab === 'today' ? (
           <TodayPage
+            locale={locale}
             now={now}
             onShowTopics={() => setActiveTab('topics')}
             snapshot={queryState.snapshot}
           />
         ) : activeTab === 'topics' ? (
-          <TopicsPage now={now} snapshot={queryState.snapshot} />
+          <TopicsPage locale={locale} now={now} snapshot={queryState.snapshot} />
         ) : (
-          <HistoryPage now={now} snapshot={queryState.snapshot} />
+          <HistoryPage locale={locale} now={now} snapshot={queryState.snapshot} />
         )}
       </main>
 
-      <nav aria-label="主要页面" className="tab-bar">
+      <nav aria-label={t(locale, 'mainNavigation')} className="tab-bar">
         {tabItems.map((item) => (
           <button
             aria-current={activeTab === item.id ? 'page' : undefined}
@@ -939,11 +968,11 @@ export default function App() {
             type="button"
           >
             <Icon name={item.icon} size={21} />
-            <span>{item.label}</span>
+            <span>{t(locale, item.labelKey)}</span>
           </button>
         ))}
       </nav>
-      {settingsOpen && <SettingsPanel onClose={() => setSettingsOpen(false)} />}
+      {settingsOpen && <SettingsPanel locale={locale} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
