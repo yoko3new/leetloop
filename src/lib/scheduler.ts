@@ -5,7 +5,7 @@ import {
   type Card,
   type Grade,
 } from 'ts-fsrs';
-import { dayDifference, nextMorning } from './dates';
+import { dayDifference, localDateKey, nextMorning } from './dates';
 import type {
   HintExposure,
   LearningStatus,
@@ -240,11 +240,30 @@ export function applyAcceptedReview(
     now,
     rating,
   );
-  const schedulerCard = alignCardDue(scheduled.card, now, reminderHour);
-  const nextDueAt = new Date(schedulerCard.due);
+  let schedulerCard = alignCardDue(scheduled.card, now, reminderHour);
   const previousDueAt = userProblem.nextReviewAt
     ? new Date(userProblem.nextReviewAt)
     : undefined;
+  // A successful, voluntary early review restarts the *current* interval
+  // today. FSRS still updates stability, but it does not postpone this review
+  // by increasing a seven-day interval to a longer one immediately.
+  if (isReview && previousDueAt && previousDueAt > now) {
+    const currentInterval = Math.round(clamp(
+      userProblem.schedulerCard?.scheduled_days ||
+        dayDifference(previousDueAt, userProblem.lastAcceptedAt ?? now),
+      1,
+      MAXIMUM_INTERVAL_DAYS,
+    ));
+    const days = rating >= Rating.Good
+      ? currentInterval
+      : Math.min(currentInterval, schedulerCard.scheduled_days);
+    schedulerCard = {
+      ...schedulerCard,
+      due: nextMorning(now, days, normalizeHour(reminderHour)),
+      scheduled_days: days,
+    };
+  }
+  const nextDueAt = new Date(schedulerCard.due);
   const nextReviewCount = userProblem.reviewCount + 1;
   const strongSuccess = rating >= Rating.Good;
   const consecutiveSuccesses = strongSuccess
@@ -316,10 +335,7 @@ function newUserProblem(problemId: string, attemptedAt: Date): UserProblem {
   };
 }
 
-/**
- * Main background-facing API. Failed submissions are evidence in Submission,
- * but intentionally do not move the current due date or mutate the FSRS card.
- */
+/** Main background-facing API. One failed review is graded per study session. */
 export function updateUserProblemForAttempt(
   existing: UserProblem | undefined,
   input: AttemptScheduleInput,
@@ -353,13 +369,82 @@ export function updateUserProblemForAttempt(
     (!current.nextReviewAt || reviewIsDue || sinceLastAccepted >= SAME_SESSION_MS);
 
   if (input.verdict !== 'Accepted') {
+    const lastFailedAt = new Date(attemptedAt);
+    const recentlyGradedFailure = Boolean(
+      current.lastFailureGradedAt &&
+      localDateKey(current.lastFailureGradedAt) === localDateKey(attemptedAt) &&
+      attemptedAt.getTime() - current.lastFailureGradedAt.getTime() < SAME_SESSION_MS,
+    );
+    if (isReview && !recentlyGradedFailure) {
+      const sourceCard = current.schedulerCard ?? createEmptyCard<Card>(attemptedAt);
+      const scheduled = schedulerFor(options.desiredRetention ?? 0.9).next(
+        sourceCard,
+        attemptedAt,
+        Rating.Again,
+      );
+      const schedulerCard = alignCardDue(
+        scheduled.card,
+        attemptedAt,
+        options.reminderHour ?? 9,
+      );
+      const nextDueAt = new Date(schedulerCard.due);
+      return {
+        userProblem: {
+          ...current,
+          status: 'relearning',
+          lastAttemptAt: attemptedAt,
+          lastFailedAt,
+          lastFailureGradedAt: attemptedAt,
+          nextReviewAt: nextDueAt,
+          reviewCount: current.reviewCount + 1,
+          lapses: current.lapses + 1,
+          consecutiveSuccesses: 0,
+          lastRating: Rating.Again,
+          approachScore: updateEvidence(current.approachScore, 0.25),
+          implementationScore: updateEvidence(current.implementationScore, 0.25),
+          schedulerCard,
+        },
+        isReview: true,
+        accepted: false,
+        rating: Rating.Again,
+        ...(current.nextReviewAt
+          ? { previousDueAt: new Date(current.nextReviewAt) }
+          : {}),
+        nextDueAt,
+      };
+    }
     return {
       userProblem: {
         ...current,
         lastAttemptAt: attemptedAt,
+        lastFailedAt,
       },
       isReview,
       accepted: false,
+      ...(current.nextReviewAt
+        ? { nextDueAt: new Date(current.nextReviewAt) }
+        : {}),
+    };
+  }
+
+  // A later AC in the same failed review session does not erase its Again
+  // evidence or extend the shortened interval. The raw AC is still retained.
+  if (
+    hasSolvedBefore &&
+    current.lastFailureGradedAt &&
+    localDateKey(current.lastFailureGradedAt) === localDateKey(attemptedAt) &&
+    attemptedAt.getTime() - current.lastFailureGradedAt.getTime() < SAME_SESSION_MS &&
+    current.nextReviewAt
+  ) {
+    return {
+      userProblem: {
+        ...current,
+        lastAttemptAt: attemptedAt,
+        lastAcceptedAt: attemptedAt,
+      },
+      nextDueAt: new Date(current.nextReviewAt),
+      isReview: true,
+      accepted: true,
     };
   }
 

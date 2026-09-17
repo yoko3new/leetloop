@@ -305,11 +305,7 @@ async function recordAttempt(
       };
       await db.submissions.add(submission);
 
-      if (
-        outcome.accepted &&
-        outcome.rating !== undefined &&
-        outcome.nextDueAt
-      ) {
+      if (outcome.rating !== undefined && outcome.nextDueAt) {
         const reviewLog: ReviewLog = {
           id: crypto.randomUUID(),
           problemId: problem.id,
@@ -322,6 +318,7 @@ async function recordAttempt(
           elapsedMs,
           attemptNumber,
           hintExposure,
+          verdict: capture.verdict,
         };
         await db.reviewLogs.add(reviewLog);
       }

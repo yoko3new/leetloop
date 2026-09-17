@@ -693,6 +693,12 @@ export default defineContentScript({
                 day: 'numeric',
               })}`;
           showToast(`Accepted · ${suffix}`, 'success');
+        } else if (!response.data.accepted && response.data.isReview && response.data.nextReviewAt) {
+          const nextReview = new Date(response.data.nextReviewAt);
+          const suffix = Number.isNaN(nextReview.getTime())
+            ? '已提前安排复习'
+            : `已加强复习 · ${nextReview.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} 再练`;
+          showToast(`${verdict} · ${suffix}`, 'neutral');
         } else {
           showToast(`${verdict} · 已记录`, response.data.accepted ? 'success' : 'neutral');
         }

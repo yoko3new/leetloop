@@ -4,12 +4,14 @@
 
 LeetLoop is a local-first LeetCode review companion. It records your submissions as you solve problems and schedules practice with spaced repetition. The goal is to keep checking what you can still solve, rather than simply counting problems you have completed.
 
-## What's in the first version
+## Current features
 
 - Detects problems and submission results on `leetcode.com/problems/*` pages;
 - Records the date, AC/WA/TLE result, time spent, number of submissions, language, and detected exposure to hints or solutions on the page;
 - Schedules reviews using FSRS plus problem-solving rules;
-- Provides Today, Topics, and History views in the Chrome side panel;
+- Provides Today, Study Plans, and History views in the Chrome side panel, with overall and topic progress for Blind 75, NeetCode 250, and Top 100 Liked;
+- Groups all submissions for a problem into one expandable history entry with first-solve and review details;
+- Uses failed reviews to bring the next review forward, suggests similar problems, and restarts the current interval after a successful early review;
 - Shows due problem counts with the extension badge and a daily notification;
 - Lets you toggle daily reminders and set their time from the top-right corner of the side panel;
 - Stores all data locally, without an account or server;
@@ -28,7 +30,7 @@ The extension has three execution contexts:
 
 1. The `leetcode.content` content script observes only the problem page you currently have open and sends submission events to the extension background process.
 2. The `background` service worker handles deduplication, storage, scheduling, notifications, and the badge.
-3. The `sidepanel` React app reads today's tasks, topic mastery, and history from the local database.
+3. The `sidepanel` React app reads today's tasks, study plan progress, and per-problem history from the local database.
 
 ## Install a prebuilt version
 
@@ -83,7 +85,7 @@ An Accepted result does not automatically mean a problem is mastered. LeetLoop c
 - Problem difficulty;
 - Time since the previous completion.
 
-The first successful submission only moves a problem into **Learning**. It reaches **Mastered** only after several spaced reviews with consistently strong results. These scores are conservative signals for scheduling, not proof that you solved a problem independently or can reproduce the performance in an interview.
+The first successful submission only moves a problem into **Learning**. A failed later review is treated as a lapse and brings the next review forward; repeated failures in one session receive one grade. A successful early review restarts the current interval from that day. These scores are conservative signals for scheduling, not proof that you solved a problem independently or can reproduce the performance in an interview.
 
 ## Privacy and platform boundaries
 
@@ -95,5 +97,5 @@ The current version starts building reliable records after installation. It does
 
 - LeetCode site changes may require updates to the submission-result selectors. Site parsing is kept in one content script to make those fixes easier.
 - The extension can detect hints or solutions opened on LeetCode pages, but it cannot know whether you viewed answers on other websites.
-- The first version supports only `leetcode.com`. The Chinese site could be supported with a separate provider adapter.
-- Data does not yet sync across devices. Wait for a future export feature before uninstalling the extension if you want to keep your records.
+- The current version supports only `leetcode.com`. The Chinese site could be supported with a separate provider adapter.
+- Data does not yet sync across devices. To upgrade, replace the files in the original installation directory and click Reload in Chrome's extensions page. Uninstalling the extension deletes its local records.

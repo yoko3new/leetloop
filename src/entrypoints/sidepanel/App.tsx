@@ -1,12 +1,15 @@
 import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import { useLiveQuery } from 'dexie-react-hooks';
 import { dayDifference, localDateKey } from '../../lib/dates';
-import { db } from '../../lib/db';
-import { calculateTopicMastery } from '../../lib/mastery';
-import { normalizeTopic, topicLabel } from '../../lib/topic-labels';
+import { db, DEFAULT_SETTINGS } from '../../lib/db';
+import { calculatePlanProgress } from '../../lib/progress';
+import { getStudyPlan, STUDY_PLANS, titleFromSlug, type StudyPlanId } from '../../lib/study-plans';
+import { topicLabel } from '../../lib/topic-labels';
 import type {
   Problem,
   ProblemDifficulty,
+  ReviewLog,
+  Settings,
   Submission,
   SubmissionVerdict,
   UserProblem,
@@ -14,13 +17,14 @@ import type {
 import { SettingsPanel } from './SettingsPanel';
 
 type TabId = 'today' | 'topics' | 'history';
-type TopicSort = 'weak' | 'count' | 'recent';
-type HistoryFilter = 'all' | 'accepted' | 'failed' | 'review';
+type HistoryFilter = 'all' | 'solved' | 'failed' | 'review';
 
 interface Snapshot {
   problems: Problem[];
   userProblems: UserProblem[];
   submissions: Submission[];
+  reviewLogs: ReviewLog[];
+  settings: Settings;
 }
 
 type SnapshotQueryState =
@@ -33,39 +37,7 @@ interface DueItem {
   estimateMinutes: number;
 }
 
-interface TopicMasteryView {
-  topic: string;
-  label?: string;
-  problemCount: number;
-  solvedCount?: number;
-  reviewedCount: number;
-  retention?: number;
-  fluency?: number;
-  transfer?: number;
-  coverage?: number;
-  confidence?: number;
-  score: number;
-  status?: string;
-}
-
-interface TopicRow extends TopicMasteryView {
-  displayLabel: string;
-  scorePercent: number;
-  recentAt: number;
-  dueCount: number;
-  lowEvidence: boolean;
-  recommendedProblem: Problem | undefined;
-  recommendationLabel: string;
-}
-
-interface HistoryGroup {
-  key: string;
-  label: string;
-  items: Submission[];
-}
-
 const DAY_MS = 24 * 60 * 60 * 1000;
-const HISTORY_RENDER_LIMIT = 300;
 
 const difficultyLabels: Record<ProblemDifficulty, string> = {
   Easy: '简单',
@@ -87,7 +59,7 @@ const verdictLabels: Record<SubmissionVerdict, string> = {
 
 const tabItems: Array<{ id: TabId; label: string; icon: IconName }> = [
   { id: 'today', label: '今日', icon: 'today' },
-  { id: 'topics', label: '主题', icon: 'topics' },
+  { id: 'topics', label: '题单', icon: 'topics' },
   { id: 'history', label: '记录', icon: 'history' },
 ];
 
@@ -158,11 +130,6 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
-function asPercent(value: number | undefined): number {
-  if (value === undefined || !Number.isFinite(value)) return 0;
-  return Math.round(clamp(value <= 1 ? value * 100 : value, 0, 100));
-}
-
 function endOfDay(value: Date): Date {
   const result = new Date(value);
   result.setHours(23, 59, 59, 999);
@@ -186,6 +153,12 @@ function formatClock(value: Date): string {
     minute: '2-digit',
     hour12: false,
   }).format(value);
+}
+
+function formatDate(value: Date | undefined): string {
+  return value
+    ? new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric' }).format(value)
+    : '—';
 }
 
 function formatDuration(milliseconds: number): string {
@@ -239,85 +212,13 @@ function openLeetCode(problem?: Problem): void {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-function topicStatus(row: TopicRow): string {
-  if (row.dueCount > 0) return '优先复习';
-  if (row.lowEvidence) return '尚需证据';
-
-  const statusMap: Record<string, string> = {
-    new: '尚未评估',
-    unrated: '尚未评估',
-    unstarted: '尚未评估',
-    weak: '优先复习',
-    struggling: '优先复习',
-    'review-due': '优先复习',
-    developing: '正在巩固',
-    learning: '正在巩固',
-    building: '正在巩固',
-    stable: '表现稳定',
-    strong: '表现稳定',
-    mastered: '掌握良好',
-  };
-
-  const normalizedStatus = row.status?.trim().toLowerCase();
-  if (normalizedStatus && statusMap[normalizedStatus]) {
-    return statusMap[normalizedStatus];
+function openLeetCodeSlug(slug: string): void {
+  const url = `https://leetcode.com/problems/${slug}/`;
+  if (typeof chrome !== 'undefined' && chrome.tabs?.create) {
+    void chrome.tabs.create({ url });
+  } else {
+    window.open(url, '_blank', 'noopener,noreferrer');
   }
-  if (row.reviewedCount === 0) return '尚未评估';
-  if (row.scorePercent < 40) return '优先复习';
-  if (row.scorePercent < 65) return '正在巩固';
-  if (row.scorePercent < 82) return '表现稳定';
-  return '掌握良好';
-}
-
-function topicReason(row: TopicRow): string {
-  if (row.dueCount > 0) {
-    return `有 ${row.dueCount} 道题已经到期，建议优先回顾`;
-  }
-  if (row.lowEvidence) {
-    return '还需要更多题目和间隔复习，暂时不判断掌握程度';
-  }
-  if (asPercent(row.coverage) < 45) {
-    return '练习覆盖较少，先补充几道不同类型的题';
-  }
-  if (asPercent(row.retention) < 60) {
-    return '近期回忆不够稳定，需要缩短复习间隔';
-  }
-  if (asPercent(row.fluency) < 60) {
-    return '思路基本正确，解题速度还可以继续提高';
-  }
-  if (asPercent(row.transfer) < 55) {
-    return '相似题的迁移表现还不稳定';
-  }
-  return '近期回忆和未检测到提示的完成表现稳定';
-}
-
-function topicStatusTone(row: TopicRow): 'muted' | 'warning' | 'accent' | 'success' {
-  const status = topicStatus(row);
-  if (status === '尚未评估' || status === '尚需证据') return 'muted';
-  if (status === '优先复习') return 'warning';
-  if (status === '正在巩固') return 'accent';
-  return 'success';
-}
-
-function historyGroupLabel(date: Date, now: Date): string {
-  const difference = dayDifference(now, date);
-  if (difference === 0) return '今天';
-  if (difference === 1) return '昨天';
-  return new Intl.DateTimeFormat('zh-CN', {
-    month: 'long',
-    day: 'numeric',
-    weekday: 'short',
-  }).format(date);
-}
-
-function historyEventLabel(
-  submission: Submission,
-  firstAcceptedIds: Set<string>,
-): string {
-  if (submission.verdict !== 'Accepted') return '提交未通过';
-  if (submission.isReview) return '复习完成';
-  if (firstAcceptedIds.has(submission.id)) return '首次记录通过';
-  return '再次通过';
 }
 
 function historyMeta(submission: Submission): string {
@@ -334,6 +235,59 @@ function historyMeta(submission: Submission): string {
   if (submission.language) parts.push(submission.language);
   parts.push(formatDuration(submission.elapsedMs));
   return parts.join(' · ');
+}
+
+function similarSlugs(slug: string, selectedPlanId: StudyPlanId, snapshot: Snapshot): string[] {
+  const closeMatches: Record<string, string[]> = {
+    'two-sum': ['two-sum-ii-input-array-is-sorted', '3sum'],
+    'climbing-stairs': ['min-cost-climbing-stairs', 'n-th-tribonacci-number'],
+    'longest-common-subsequence': ['edit-distance', 'distinct-subsequences'],
+    'lowest-common-ancestor-of-a-binary-search-tree': ['lowest-common-ancestor-of-a-binary-tree', 'kth-smallest-element-in-a-bst'],
+    'house-robber-ii': ['house-robber', 'house-robber-iii'],
+    'alien-dictionary': ['verifying-an-alien-dictionary', 'course-schedule'],
+    'implement-trie-prefix-tree': ['design-add-and-search-words-data-structure', 'word-search-ii'],
+  };
+  const plans = [getStudyPlan(selectedPlanId), ...STUDY_PLANS.filter((plan) => plan.id !== selectedPlanId)];
+  const source = snapshot.problems.find((problem) => problem.slug === slug);
+  const topics = new Set(source?.topics ?? []);
+  const words = new Set(slug.split('-').filter((word) =>
+    word.length >= 3 && !['array', 'string', 'binary', 'tree', 'number', 'with', 'from', 'into', 'and', 'the'].includes(word),
+  ));
+  const groups = plans.flatMap((plan) => plan.groups);
+  const sameGroups = groups.filter((group) => group.slugs.includes(slug));
+  const known = new Map(snapshot.problems.map((problem) => [problem.slug, problem]));
+  const solved = new Set(snapshot.userProblems.filter((item) => item.firstSolvedAt).map((item) => item.problemId));
+  const candidates = new Set([
+    ...plans.flatMap((plan) => plan.slugs),
+    ...snapshot.problems.map((problem) => problem.slug),
+  ]);
+  return [...candidates]
+    .filter((candidate) => candidate !== slug)
+    .map((candidate) => {
+      const explicit = closeMatches[slug]?.indexOf(candidate) ?? -1;
+      const sharedTopics = known.get(candidate)?.topics.filter((topic) => topics.has(topic)).length ?? 0;
+      const sharedWords = candidate.split('-').filter((word) => words.has(word)).length;
+      const sameGroup = sameGroups.some((group) => group.slugs.includes(candidate));
+      return {
+        slug: candidate,
+        score: (explicit >= 0 ? 100 - explicit : 0) + sharedTopics * 8 + sharedWords * 4 + (sameGroup ? 2 : 0),
+      };
+    })
+    .filter((candidate) => candidate.score >= 4)
+    .sort((a, b) =>
+      b.score - a.score ||
+      Number(solved.has(`leetcode:${a.slug}`)) - Number(solved.has(`leetcode:${b.slug}`)) ||
+      a.slug.localeCompare(b.slug),
+    )
+    .map((candidate) => candidate.slug)
+    .slice(0, 2);
+}
+
+function lastReviewDate(problemId: string, snapshot: Snapshot): Date | undefined {
+  const firstSolvedAt = snapshot.userProblems.find((item) => item.problemId === problemId)?.firstSolvedAt;
+  return snapshot.reviewLogs
+    .filter((log) => log.problemId === problemId && (!firstSolvedAt || log.reviewedAt > firstSolvedAt))
+    .sort((a, b) => b.reviewedAt.getTime() - a.reviewedAt.getTime())[0]?.reviewedAt;
 }
 
 function EmptyState({
@@ -575,7 +529,7 @@ function TodayPage({
         <EmptyState
           action={
             <button className="secondary-button" onClick={onShowTopics} type="button">
-              从薄弱主题选一题
+              从题单选一题
             </button>
           }
           description={
@@ -592,326 +546,196 @@ function TodayPage({
 }
 
 function TopicsPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
-  const [sort, setSort] = useState<TopicSort>('weak');
-
-  const rows = useMemo(() => {
-    const todayEnd = endOfDay(now);
-    const rawRows = calculateTopicMastery(
-      snapshot.problems,
-      snapshot.userProblems,
-      snapshot.submissions,
-      now,
-    ) as unknown as TopicMasteryView[];
-    const userProblemById = new Map(
-      snapshot.userProblems.map((item) => [item.problemId, item]),
-    );
-
-    return rawRows.map<TopicRow>((row) => {
-      const normalized = normalizeTopic(row.topic);
-      const relatedProblems = snapshot.problems.filter((problem) =>
-        problem.topics.some((topic) => normalizeTopic(topic) === normalized),
-      );
-      let recentAt = 0;
-      let dueCount = 0;
-      for (const problem of relatedProblems) {
-        const userProblem = userProblemById.get(problem.id);
-        if (!userProblem) continue;
-        recentAt = Math.max(recentAt, userProblem.lastAttemptAt.getTime());
-        if (userProblem.nextReviewAt && userProblem.nextReviewAt <= todayEnd) {
-          dueCount += 1;
-        }
-      }
-
-      const recommendedProblem = [...relatedProblems].sort((a, b) => {
-        const aUser = userProblemById.get(a.id);
-        const bUser = userProblemById.get(b.id);
-        const aDue = Boolean(
-          aUser?.nextReviewAt && aUser.nextReviewAt <= todayEnd,
-        );
-        const bDue = Boolean(
-          bUser?.nextReviewAt && bUser.nextReviewAt <= todayEnd,
-        );
-        if (aDue !== bDue) return aDue ? -1 : 1;
-
-        const aUnsolved = !aUser?.firstSolvedAt;
-        const bUnsolved = !bUser?.firstSolvedAt;
-        if (aUnsolved !== bUnsolved) return aUnsolved ? -1 : 1;
-
-        const aLastPracticed = aUser?.lastAttemptAt.getTime() ?? 0;
-        const bLastPracticed = bUser?.lastAttemptAt.getTime() ?? 0;
-        return aLastPracticed - bLastPracticed;
-      })[0];
-      const recommendedUser = recommendedProblem
-        ? userProblemById.get(recommendedProblem.id)
-        : undefined;
-      const recommendedIsDue = Boolean(
-        recommendedUser?.nextReviewAt &&
-          recommendedUser.nextReviewAt <= todayEnd,
-      );
-      const recommendationLabel = recommendedIsDue
-        ? '今天复习'
-        : !recommendedUser?.firstSolvedAt
-          ? '建议新做'
-          : '再次练习';
-      const lowEvidence =
-        (row.solvedCount ?? 0) < 2 ||
-        row.reviewedCount === 0 ||
-        (row.confidence ?? 0) < 0.35;
-
-      return {
-        ...row,
-        displayLabel: row.label || topicLabel(row.topic),
-        scorePercent: asPercent(row.score),
-        recentAt,
-        dueCount,
-        lowEvidence,
-        recommendedProblem,
-        recommendationLabel,
-      };
-    });
-  }, [now, snapshot.problems, snapshot.submissions, snapshot.userProblems]);
-
-  const sortedRows = useMemo(() => {
-    return [...rows].sort((a, b) => {
-      if (sort === 'count') return b.problemCount - a.problemCount;
-      if (sort === 'recent') return b.recentAt - a.recentAt;
-
-      const priority = (row: TopicRow): number => {
-        if (row.dueCount > 0) return 0;
-        if (!row.lowEvidence && row.scorePercent < 65) return 1;
-        if (!row.lowEvidence) return 2;
-        return 3;
-      };
-      return (
-        priority(a) - priority(b) ||
-        b.dueCount - a.dueCount ||
-        a.scorePercent - b.scorePercent ||
-        b.problemCount - a.problemCount
-      );
-    });
-  }, [rows, sort]);
+  const [expanded, setExpanded] = useState('');
+  const selectedPlanId = snapshot.settings.selectedStudyPlan ?? 'blind75';
+  const plan = getStudyPlan(selectedPlanId);
+  const progress = useMemo(
+    () => calculatePlanProgress(plan, snapshot.userProblems),
+    [plan, snapshot.userProblems],
+  );
+  const problemBySlug = useMemo(
+    () => new Map(snapshot.problems.map((problem) => [problem.slug, problem])),
+    [snapshot.problems],
+  );
+  const userById = useMemo(
+    () => new Map(snapshot.userProblems.map((item) => [item.problemId, item])),
+    [snapshot.userProblems],
+  );
 
   return (
-    <div className="page page--topics">
+    <div className="page page--plans">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">了解真正掌握的部分</p>
-          <h1>主题掌握度</h1>
+          <p className="eyebrow">按常见题单查看真实进度</p>
+          <h1>题单进度</h1>
         </div>
       </header>
 
-      <aside className="index-explainer">
-        <strong>综合训练指数</strong>
-        <p>综合复习保持、熟练度、迁移和覆盖情况，不代表做对概率。</p>
-      </aside>
-
-      <div aria-label="主题排序" className="segment-control" role="group">
-        {(
-          [
-            ['weak', '薄弱优先'],
-            ['count', '题目最多'],
-            ['recent', '最近练习'],
-          ] as const
-        ).map(([value, label]) => (
+      <div aria-label="选择题单" className="plan-picker" role="group">
+        {STUDY_PLANS.map((option) => (
           <button
-            aria-pressed={sort === value}
-            className={sort === value ? 'is-active' : ''}
-            key={value}
-            onClick={() => setSort(value)}
+            aria-pressed={option.id === plan.id}
+            className={option.id === plan.id ? 'is-active' : ''}
+            key={option.id}
+            onClick={() => {
+              void db.settings.put({
+                ...snapshot.settings,
+                selectedStudyPlan: option.id,
+              });
+            }}
             type="button"
           >
-            {label}
+            {option.name}
           </button>
         ))}
       </div>
 
-      {sortedRows.length === 0 ? (
-        <EmptyState
-          action={
-            <button
-              className="primary-button"
-              onClick={() => openLeetCode()}
-              type="button"
-            >
-              打开 LeetCode
-              <Icon name="arrow" size={17} />
-            </button>
-          }
-          description="完成几道题并进行至少一次复习后，这里会显示你的真实掌握情况。"
-          icon="topics"
-          title="还没有足够的数据"
-        />
-      ) : (
-        <section aria-label="各主题掌握度" className="topic-list">
-          {sortedRows.map((row) => (
-            <article className="topic-card" key={row.topic}>
-              <div className="topic-card__heading">
-                <div>
-                  <h2>{row.displayLabel}</h2>
-                  <p>
-                    已解 {row.solvedCount ?? 0} / 已收录 {row.problemCount} · 已复习{' '}
-                    {row.reviewedCount}
-                  </p>
-                </div>
-                <span className={`status-chip status-chip--${topicStatusTone(row)}`}>
-                  {topicStatus(row)}
+      <section aria-label={`${plan.name}总体进度`} className="plan-summary">
+        <span>已完成</span>
+        <strong>{progress.solved}<small> / {progress.total} 题</small></strong>
+        <div
+          aria-label={`已完成 ${progress.solved} / ${progress.total} 题`}
+          aria-valuemax={progress.total}
+          aria-valuemin={0}
+          aria-valuenow={progress.solved}
+          className="progress-track"
+          role="progressbar"
+        >
+          <span style={{ width: `${Math.round(progress.solved / progress.total * 100)}%` }} />
+        </div>
+        <p>只有记录过通过的题目计入完成；重复提交不会重复计数。</p>
+      </section>
+
+      <div className="section-heading plan-section-heading">
+        <h2>分主题进度</h2>
+        <a href={plan.sourceUrl} rel="noreferrer" target="_blank">查看原题单 ↗</a>
+      </div>
+      <div className="plan-groups">
+        {progress.groups.map(({ group, solved, total }) => {
+          const key = `${plan.id}:${group.name}`;
+          const isOpen = expanded === key;
+          return (
+            <section className="plan-group" key={key}>
+              <button
+                aria-expanded={isOpen}
+                className="plan-group__trigger"
+                onClick={() => setExpanded(isOpen ? '' : key)}
+                type="button"
+              >
+                <span className="plan-group__heading">
+                  <strong>{group.name}</strong>
+                  <span>{solved} / {total} 题</span>
                 </span>
-              </div>
-              {row.lowEvidence ? (
-                <div className="evidence-state">
-                  <span>综合训练指数</span>
-                  <strong>证据不足</strong>
-                </div>
-              ) : (
-                <div className="mastery-line">
-                  <div
-                    aria-label={`${row.displayLabel}综合训练指数 ${row.scorePercent}%`}
-                    aria-valuemax={100}
-                    aria-valuemin={0}
-                    aria-valuenow={row.scorePercent}
-                    className="mastery-track"
-                    role="progressbar"
-                  >
-                    <span style={{ width: `${row.scorePercent}%` }} />
-                  </div>
-                  <strong>{row.scorePercent}%</strong>
+                <span className="plan-group__progress">
+                  <span style={{ width: `${Math.round(solved / total * 100)}%` }} />
+                </span>
+                <span className="plan-group__chevron" aria-hidden="true">{isOpen ? '⌃' : '⌄'}</span>
+              </button>
+              {isOpen && (
+                <div className="plan-problems">
+                  {group.slugs.map((slug) => {
+                    const problem = problemBySlug.get(slug);
+                    const user = userById.get(`leetcode:${slug}`);
+                    const reviewCount = Math.max(0, (user?.reviewCount ?? 0) - (user?.firstSolvedAt ? 1 : 0));
+                    const recentReview = lastReviewDate(`leetcode:${slug}`, snapshot);
+                    return (
+                      <article className="plan-problem" key={slug}>
+                        <div className="plan-problem__top">
+                          <span className={user?.firstSolvedAt ? 'plan-problem__check is-done' : 'plan-problem__check'}>
+                            {user?.firstSolvedAt ? '✓' : '○'}
+                          </span>
+                          <strong>{problem?.title ?? titleFromSlug(slug)}</strong>
+                          <button
+                            aria-label={`打开${problem?.title ?? titleFromSlug(slug)}`}
+                            onClick={() => openLeetCodeSlug(slug)}
+                            type="button"
+                          >
+                            <Icon name="arrow" size={15} />
+                          </button>
+                        </div>
+                        <div className="plan-problem__details">
+                          <span>首刷 {formatDate(user?.firstSolvedAt)}</span>
+                          <span>复习 {reviewCount} 次</span>
+                          <span>最近复习 {formatDate(recentReview)}</span>
+                        </div>
+                        {user?.nextReviewAt && (
+                          <p className="plan-problem__next">下次复习：{formatDate(user.nextReviewAt)}{user.nextReviewAt <= now ? ' · 已到期' : ''}</p>
+                        )}
+                      </article>
+                    );
+                  })}
                 </div>
               )}
-              <p className="topic-reason">{topicReason(row)}</p>
-              {row.recommendedProblem && (
-                <div className="topic-recommendation">
-                  <span className="topic-recommendation__copy">
-                    <small>{row.recommendationLabel}</small>
-                    <strong title={row.recommendedProblem.title}>
-                      {row.recommendedProblem.title}
-                    </strong>
-                  </span>
-                  <button
-                    aria-label={`打开${row.recommendedProblem.title}`}
-                    onClick={() => openLeetCode(row.recommendedProblem)}
-                    type="button"
-                  >
-                    打开题目
-                    <Icon name="arrow" size={15} />
-                  </button>
-                </div>
-              )}
-            </article>
-          ))}
-        </section>
-      )}
+            </section>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
   const [filter, setFilter] = useState<HistoryFilter>('all');
+  const [expandedProblemId, setExpandedProblemId] = useState<string | null>(null);
   const problemById = useMemo(
     () => new Map(snapshot.problems.map((problem) => [problem.id, problem])),
     [snapshot.problems],
   );
-
-  const firstAcceptedIds = useMemo(() => {
-    const ids = new Set<string>();
-    const seenProblems = new Set<string>();
-    const oldestFirst = [...snapshot.submissions].sort(
-      (a, b) => a.submittedAt.getTime() - b.submittedAt.getTime(),
+  const userById = useMemo(
+    () => new Map(snapshot.userProblems.map((item) => [item.problemId, item])),
+    [snapshot.userProblems],
+  );
+  const entries = useMemo(() => {
+    const byProblem = new Map<string, Submission[]>();
+    for (const submission of snapshot.submissions) {
+      const rows = byProblem.get(submission.problemId) ?? [];
+      rows.push(submission);
+      byProblem.set(submission.problemId, rows);
+    }
+    return [...byProblem].map(([problemId, rows]) => ({
+      problemId,
+      attempts: rows.sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime()),
+    })).sort((a, b) =>
+      (b.attempts[0]?.submittedAt.getTime() ?? 0) -
+      (a.attempts[0]?.submittedAt.getTime() ?? 0),
     );
-    for (const submission of oldestFirst) {
-      if (
-        submission.verdict === 'Accepted' &&
-        !seenProblems.has(submission.problemId)
-      ) {
-        seenProblems.add(submission.problemId);
-        ids.add(submission.id);
-      }
-    }
-    return ids;
   }, [snapshot.submissions]);
-
-  const historySelection = useMemo(() => {
-    const matching = snapshot.submissions
-      .filter((submission) => {
-        if (filter === 'accepted') return submission.verdict === 'Accepted';
-        if (filter === 'failed') return submission.verdict !== 'Accepted';
-        if (filter === 'review') return submission.isReview;
-        return true;
-      })
-      .sort((a, b) => b.submittedAt.getTime() - a.submittedAt.getTime());
-    return {
-      items: matching.slice(0, HISTORY_RENDER_LIMIT),
-      total: matching.length,
-    };
-  }, [filter, snapshot.submissions]);
-
-  const filteredSubmissions = historySelection.items;
-
-  const groups = useMemo(() => {
-    const result: HistoryGroup[] = [];
-    for (const submission of filteredSubmissions) {
-      const key = localDateKey(submission.submittedAt);
-      let group = result[result.length - 1];
-      if (!group || group.key !== key) {
-        group = {
-          key,
-          label: historyGroupLabel(submission.submittedAt, now),
-          items: [],
-        };
-        result.push(group);
-      }
-      group.items.push(submission);
-    }
-    return result;
-  }, [filteredSubmissions, now]);
-
+  const filteredEntries = entries.filter((entry) => {
+    const user = userById.get(entry.problemId);
+    if (filter === 'solved') return Boolean(user?.firstSolvedAt);
+    if (filter === 'failed') return entry.attempts.some((attempt) => attempt.verdict !== 'Accepted');
+    if (filter === 'review') return (user?.reviewCount ?? 0) > 1;
+    return true;
+  });
   const weekStart = now.getTime() - 7 * DAY_MS;
-  const recentSubmissions = snapshot.submissions.filter(
-    (submission) => submission.submittedAt.getTime() >= weekStart,
-  );
-  const recentReviews = recentSubmissions.filter(
-    (submission) => submission.isReview && submission.verdict === 'Accepted',
-  ).length;
-  const recentAccepted = recentSubmissions.filter(
-    (submission) =>
-      submission.verdict === 'Accepted' &&
-      (submission.isReview || firstAcceptedIds.has(submission.id)),
-  );
-  const noHintRate =
-    recentAccepted.length === 0
-      ? null
-      : Math.round(
-          (recentAccepted.filter((submission) => submission.hintExposure === 'none')
-            .length /
-            recentAccepted.length) *
-            100,
-        );
+  const recentSubmissions = snapshot.submissions.filter((item) => item.submittedAt.getTime() >= weekStart);
+  const practicedThisWeek = new Set(recentSubmissions.map((item) => item.problemId)).size;
+  const reviewCountThisWeek = snapshot.reviewLogs.filter((log) => {
+    const firstSolved = userById.get(log.problemId)?.firstSolvedAt;
+    return log.reviewedAt.getTime() >= weekStart && Boolean(firstSolved && log.reviewedAt > firstSolved);
+  }).length;
 
   return (
     <div className="page page--history">
       <header className="page-heading">
         <div>
-          <p className="eyebrow">每次尝试都算数</p>
+          <p className="eyebrow">同一道题只显示一条记录</p>
           <h1>学习记录</h1>
         </div>
       </header>
 
       <section className="week-summary">
         <span>近 7 天</span>
-        <p>
-          完成 <strong>{recentReviews}</strong> 次复习
-          <span aria-hidden="true"> · </span>
-          未检测到提示占比{' '}
-          <strong>{noHintRate === null ? '—' : `${noHintRate}%`}</strong>
-        </p>
+        <p>练习 <strong>{practicedThisWeek}</strong> 道题 · 复习 <strong>{reviewCountThisWeek}</strong> 次</p>
       </section>
 
       <div aria-label="记录筛选" className="filter-chips" role="group">
         {(
           [
             ['all', '全部'],
-            ['accepted', '通过'],
-            ['failed', '未通过'],
-            ['review', '复习'],
+            ['solved', '已完成'],
+            ['failed', '有失败'],
+            ['review', '已复习'],
           ] as const
         ).map(([value, label]) => (
           <button
@@ -926,82 +750,95 @@ function HistoryPage({ now, snapshot }: { now: Date; snapshot: Snapshot }) {
         ))}
       </div>
 
-      {historySelection.total > HISTORY_RENDER_LIMIT && (
-        <p className="history-limit-note" role="status">
-          该筛选共 {historySelection.total} 条，仅显示最近 {HISTORY_RENDER_LIMIT} 条。
-        </p>
-      )}
-
-      {snapshot.submissions.length === 0 ? (
-        <EmptyState
-          description="你的第一次提交或复习会出现在这里。"
-          icon="history"
-          title="还没有学习记录"
-        />
-      ) : groups.length === 0 ? (
-        <EmptyState
-          description="尝试切换上方的筛选条件。"
-          icon="history"
-          title="没有符合条件的记录"
-        />
+      {entries.length === 0 ? (
+        <EmptyState description="在 LeetCode 提交后，这里会按题目汇总记录。" icon="history" title="还没有学习记录" />
+      ) : filteredEntries.length === 0 ? (
+        <EmptyState description="尝试切换上方的筛选条件。" icon="history" title="没有符合条件的记录" />
       ) : (
-        <div className="history-groups">
-          {groups.map((group) => (
-            <section className="history-group" key={group.key}>
-              <h2>{group.label}</h2>
-              <div className="history-list">
-                {group.items.map((submission) => {
-                  const problem = problemById.get(submission.problemId);
-                  const eventLabel = historyEventLabel(
-                    submission,
-                    firstAcceptedIds,
-                  );
-                  const eventClass =
-                    submission.verdict !== 'Accepted'
-                      ? 'failed'
-                      : submission.isReview
-                        ? 'review'
-                        : 'accepted';
-
-                  return (
-                    <button
-                      className="history-item"
-                      disabled={!problem}
-                      key={submission.id}
-                      onClick={() => openLeetCode(problem)}
-                      type="button"
-                    >
-                      <time dateTime={submission.submittedAt.toISOString()}>
-                        {formatClock(submission.submittedAt)}
-                      </time>
-                      <span className={`timeline-dot timeline-dot--${eventClass}`} />
-                      <span className="history-item__content">
-                        <span className="history-item__title">
-                          {problem?.title ?? '未知题目'}
-                        </span>
-                        <span className="history-item__event-row">
-                          <span className={`event-label event-label--${eventClass}`}>
-                            {eventLabel}
+        <div className="history-problems">
+          {filteredEntries.map((entry) => {
+            const problem = problemById.get(entry.problemId);
+            const user = userById.get(entry.problemId);
+            const latest = entry.attempts[0]!;
+            const slug = problem?.slug ?? entry.problemId.replace(/^leetcode:/, '');
+            const title = problem?.title ?? titleFromSlug(slug);
+            const reviewCount = Math.max(0, (user?.reviewCount ?? 0) - (user?.firstSolvedAt ? 1 : 0));
+            const latestReview = lastReviewDate(entry.problemId, snapshot);
+            const hasRecentFailure = Boolean(user?.lastFailedAt && (
+              !user.lastAcceptedAt || user.lastFailedAt >= user.lastAcceptedAt
+            ));
+            const needsPractice = hasRecentFailure || user?.status === 'relearning';
+            const related = needsPractice
+              ? similarSlugs(slug, snapshot.settings.selectedStudyPlan ?? 'blind75', snapshot)
+              : [];
+            const isOpen = expandedProblemId === entry.problemId;
+            return (
+              <article className="history-problem" key={entry.problemId}>
+                <button
+                  aria-expanded={isOpen}
+                  className="history-problem__trigger"
+                  onClick={() => setExpandedProblemId(isOpen ? null : entry.problemId)}
+                  type="button"
+                >
+                  <span className={needsPractice || !user?.firstSolvedAt ? 'timeline-dot timeline-dot--failed' : 'timeline-dot timeline-dot--accepted'} />
+                  <span className="history-problem__main">
+                    <strong>{title}</strong>
+                    <span>{entry.attempts.length} 次提交 · 最近 {formatDate(latest.submittedAt)}</span>
+                  </span>
+                  <span className={needsPractice
+                    ? 'status-chip status-chip--warning'
+                    : user?.firstSolvedAt
+                      ? 'status-chip status-chip--success'
+                      : 'status-chip status-chip--danger'}>
+                    {needsPractice ? '待巩固' : user?.firstSolvedAt ? '已完成' : '未通过'}
+                  </span>
+                  <span aria-hidden="true" className="history-problem__chevron">{isOpen ? '⌃' : '⌄'}</span>
+                </button>
+                {isOpen && (
+                  <div className="history-problem__body">
+                    <div className="history-problem__stats">
+                      <span>首刷 <strong>{formatDate(user?.firstSolvedAt)}</strong></span>
+                      <span>复习 <strong>{reviewCount} 次</strong></span>
+                      <span>最近复习 <strong>{formatDate(latestReview)}</strong></span>
+                    </div>
+                    {user?.nextReviewAt && (
+                      <p className="history-problem__due">下次复习：{formatDate(user.nextReviewAt)}</p>
+                    )}
+                    <div className="history-problem__actions">
+                      <button className="secondary-button" onClick={() => openLeetCodeSlug(slug)} type="button">
+                        打开题目 <Icon name="arrow" size={15} />
+                      </button>
+                    </div>
+                    {related.length > 0 && (
+                      <section className="similar-problems">
+                        <strong>类似题练习</strong>
+                        {related.map((candidate) => (
+                          <button key={candidate} onClick={() => openLeetCodeSlug(candidate)} type="button">
+                            {problemById.get(`leetcode:${candidate}`)?.title ?? titleFromSlug(candidate)}
+                            <Icon name="arrow" size={14} />
+                          </button>
+                        ))}
+                      </section>
+                    )}
+                    <div className="history-problem__attempts">
+                      <strong>提交明细</strong>
+                      {entry.attempts.map((attempt) => (
+                        <div className="history-attempt" key={attempt.id}>
+                          <time dateTime={attempt.submittedAt.toISOString()}>
+                            {formatDate(attempt.submittedAt)} {formatClock(attempt.submittedAt)}
+                          </time>
+                          <span className={attempt.verdict === 'Accepted' ? 'history-attempt__result is-accepted' : 'history-attempt__result is-failed'}>
+                            {verdictLabels[attempt.verdict]}{attempt.isReview ? ' · 复习' : ''}
                           </span>
-                          {problem && (
-                            <span
-                              className={`difficulty difficulty--${problem.difficulty.toLowerCase()}`}
-                            >
-                              {difficultyLabels[problem.difficulty]}
-                            </span>
-                          )}
-                        </span>
-                        <span className="history-item__meta">
-                          {historyMeta(submission)}
-                        </span>
-                      </span>
-                      {problem && <Icon name="arrow" size={15} />}
-                    </button>
-                  );
-                })}
-              </div>
-            </section>
-          ))}
+                          <small>{historyMeta(attempt)}</small>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </article>
+            );
+          })}
         </div>
       )}
     </div>
@@ -1015,14 +852,16 @@ export default function App() {
   const [queryRevision, setQueryRevision] = useState(0);
   const queryState = useLiveQuery(async (): Promise<SnapshotQueryState> => {
     try {
-      const [problems, userProblems, submissions] = await Promise.all([
+      const [problems, userProblems, submissions, reviewLogs, settings] = await Promise.all([
         db.problems.toArray(),
         db.userProblems.toArray(),
         db.submissions.toArray(),
+        db.reviewLogs.toArray(),
+        db.settings.get('main'),
       ]);
       return {
         status: 'ready',
-        snapshot: { problems, userProblems, submissions },
+        snapshot: { problems, userProblems, submissions, reviewLogs, settings: settings ?? DEFAULT_SETTINGS },
       };
     } catch (error) {
       return {

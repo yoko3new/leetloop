@@ -1,5 +1,6 @@
 import { Rating } from 'ts-fsrs';
 import { describe, expect, it } from 'vitest';
+import { dayDifference, nextMorning } from '../src/lib/dates';
 import {
   updateUserProblemForAttempt,
   type AttemptScheduleInput,
@@ -101,7 +102,7 @@ describe('review scheduler', () => {
     expect(result.userProblem.nextReviewAt).toBeUndefined();
   });
 
-  it('keeps the due date and card unchanged after a failed review attempt', () => {
+  it('grades a failed review and brings the due date forward', () => {
     const first = updateUserProblemForAttempt(undefined, attempt());
     const failed = updateUserProblemForAttempt(
       first.userProblem,
@@ -112,10 +113,55 @@ describe('review scheduler', () => {
     );
 
     expect(failed.isReview).toBe(true);
-    expect(failed.userProblem.nextReviewAt).toEqual(first.nextDueAt);
-    expect(failed.userProblem.schedulerCard).toEqual(
-      first.userProblem.schedulerCard,
-    );
+    expect(failed.rating).toBe(Rating.Again);
+    expect(failed.userProblem.status).toBe('relearning');
+    expect(failed.userProblem.lapses).toBe(1);
+    expect(failed.userProblem.reviewCount).toBe(2);
+    expect(dayDifference(failed.nextDueAt!, first.nextDueAt!)).toBe(1);
+  });
+
+  it('keeps one failure grade for a session even if a later submission passes', () => {
+    const first = updateUserProblemForAttempt(undefined, attempt());
+    const reviewAt = first.nextDueAt!;
+    const failed = updateUserProblemForAttempt(first.userProblem, attempt({
+      attemptedAt: reviewAt,
+      verdict: 'Wrong Answer',
+    }));
+    const again = updateUserProblemForAttempt(failed.userProblem, attempt({
+      attemptedAt: new Date(reviewAt.getTime() + 5 * 60_000),
+      verdict: 'Wrong Answer',
+      attemptNumber: 2,
+    }));
+    const passed = updateUserProblemForAttempt(again.userProblem, attempt({
+      attemptedAt: new Date(reviewAt.getTime() + 10 * 60_000),
+      attemptNumber: 3,
+    }));
+
+    expect(again.rating).toBeUndefined();
+    expect(passed.rating).toBeUndefined();
+    expect(passed.accepted).toBe(true);
+    expect(passed.nextDueAt).toEqual(failed.nextDueAt);
+    expect(passed.userProblem.reviewCount).toBe(2);
+  });
+
+  it('restarts an early successful review from today using the current interval', () => {
+    const first = updateUserProblemForAttempt(undefined, attempt());
+    const oldDue = nextMorning(baseTime, 7, 9);
+    const earlyAt = nextMorning(baseTime, 5, 9);
+    const seeded = {
+      ...first.userProblem,
+      nextReviewAt: oldDue,
+      schedulerCard: {
+        ...first.userProblem.schedulerCard!,
+        due: oldDue,
+        scheduled_days: 7,
+      },
+    };
+    const early = updateUserProblemForAttempt(seeded, attempt({ attemptedAt: earlyAt }));
+
+    expect(early.isReview).toBe(true);
+    expect(dayDifference(early.nextDueAt!, earlyAt)).toBe(7);
+    expect(early.nextDueAt!.getTime()).toBeGreaterThan(oldDue.getTime());
   });
 
   it('grades an AC after a failed review submission as Hard', () => {

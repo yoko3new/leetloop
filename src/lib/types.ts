@@ -46,6 +46,8 @@ export interface UserProblem {
   approachScore: number;
   implementationScore: number;
   schedulerCard?: Card;
+  lastFailedAt?: Date;
+  lastFailureGradedAt?: Date;
 }
 
 export interface Submission {
@@ -71,6 +73,7 @@ export interface ReviewLog {
   elapsedMs: number;
   attemptNumber: number;
   hintExposure: HintExposure;
+  verdict?: SubmissionVerdict;
 }
 
 export interface Settings {
@@ -79,6 +82,7 @@ export interface Settings {
   reminderHour: number;
   desiredRetention: number;
   lastNotificationDate?: string;
+  selectedStudyPlan?: 'blind75' | 'neetcode250' | 'hot100';
 }
 
 export interface ProblemCapture {
